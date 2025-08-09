@@ -639,7 +639,9 @@ async function showAdminStats(ctx) {
 
 // Bot commands and handlers
 bot.start(async (ctx) => {
-  await ctx.reply("Welcome to the Dating Bot!");
+  await ctx.reply(
+    "💖 Find people near you who share your vibes — in just 2 minutes!\n\nWelcome to the Dating Bot!"
+  );
   await showMainMenu(ctx);
 });
 
