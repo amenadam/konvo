@@ -89,7 +89,17 @@ const profileWizard = new Scenes.WizardScene(
       location: ctx.wizard.state.location,
       active: true,
       createdAt: new Date(),
+      referralCredits: ctx.wizard.state.referralCredits || 0,
+      referredBy: ctx.wizard.state.referredBy || null,
     };
+
+    // Generate referral code if not exists
+    if (!profile.referralCode) {
+      profile.referralCode = `KONVO-${Math.random()
+        .toString(36)
+        .substring(2, 8)
+        .toUpperCase()}`;
+    }
 
     await usersCollection.updateOne(
       { telegramId },
@@ -276,6 +286,8 @@ async function connectDB() {
 
     // Create index for location-based searches
     await usersCollection.createIndex({ location: "2dsphere" });
+    // Create index for referral code
+    await usersCollection.createIndex({ referralCode: 1 }, { unique: true });
 
     console.log("Connected to MongoDB");
   } catch (err) {
@@ -304,7 +316,7 @@ async function showMainMenu(ctx) {
     Markup.keyboard([
       ["🔍 Find Match", "💌 My Matches"],
       ["👤 My Profile", "✏️ Edit Profile"],
-      ["❤️ Who Liked Me"], // <-- Add this line
+      ["❤️ Who Liked Me", "🎁 Referral Program"],
       ["🚪 Deactivate Profile"],
     ]).resize()
   );
@@ -335,6 +347,24 @@ async function findMatch(ctx, maxDistance = 50) {
   if (!user) {
     await ctx.reply("Please create a profile first.");
     return ctx.scene.enter("profile-wizard");
+  }
+
+  // Check for premium matches first if user has credits
+  if (user.referralCredits > 0) {
+    const premiumMatch = await findPremiumMatch(user, telegramId);
+    if (premiumMatch) {
+      // Deduct credit
+      await usersCollection.updateOne(
+        { telegramId },
+        { $inc: { referralCredits: -1 } }
+      );
+      await ctx.reply(
+        "✨ You're using a premium match credit (remaining: " +
+          (user.referralCredits - 1) +
+          ")"
+      );
+      return showMatch(ctx, premiumMatch);
+    }
   }
 
   // Determine interested gender
@@ -411,6 +441,47 @@ async function findMatch(ctx, maxDistance = 50) {
   }
 
   await showMatch(ctx, potentialMatch);
+}
+
+// Find premium matches (users with referral credits)
+async function findPremiumMatch(user, telegramId) {
+  // Determine interested gender
+  let interestedGender;
+  if (user.interestedIn === "Male") interestedGender = "Male";
+  else if (user.interestedIn === "Female") interestedGender = "Female";
+  else interestedGender = { $in: ["Male", "Female"] };
+
+  // Find users who match the criteria and haven't been matched/disliked before
+  const alreadyMatched = await matchesCollection
+    .find({
+      $or: [{ telegramId1: telegramId }, { telegramId2: telegramId }],
+    })
+    .toArray();
+
+  const excludedtelegramIds = [
+    telegramId,
+    ...alreadyMatched
+      .filter(
+        (m) =>
+          m.status === "matched" ||
+          m.status === "disliked" ||
+          (m.status === "pending" && m.telegramId1 === telegramId)
+      )
+      .map((m) =>
+        m.telegramId1 === telegramId ? m.telegramId2 : m.telegramId1
+      ),
+  ];
+
+  // Find premium users first
+  const premiumMatch = await usersCollection.findOne({
+    telegramId: { $nin: excludedtelegramIds },
+    gender: interestedGender,
+    active: true,
+    interestedIn: { $in: [user.gender, "Both"] },
+    referralCredits: { $gt: 0 },
+  });
+
+  return premiumMatch;
 }
 
 // Show a match with distance information
@@ -530,12 +601,17 @@ async function showUserProfile(ctx) {
     locationInfo = "\nLocation: Not specified";
   }
 
-  const caption = `Your Profile:\n\nName: ${user.name}\nAge: ${user.age}\nGender: ${user.gender}\nInterested In: ${user.interestedIn}\nBio: ${user.bio}${locationInfo}`;
+  const caption = `Your Profile:\n\nName: ${user.name}\nAge: ${
+    user.age
+  }\nGender: ${user.gender}\nInterested In: ${user.interestedIn}\nBio: ${
+    user.bio
+  }${locationInfo}\n\n🎁 Referral Credits: ${user.referralCredits || 0}`;
 
   await ctx.replyWithPhoto(user.photo, {
     caption: caption,
     ...Markup.inlineKeyboard([
       Markup.button.callback("✏️ Edit Profile", "edit_profile"),
+      Markup.button.callback("🎁 Referral Program", "show_referral"),
     ]),
   });
 }
@@ -576,7 +652,7 @@ async function handleMessage(ctx, recipientId, text) {
         "🔗 Share My Username",
         `share_username_${senderId}`
       ),
-      Markup.button.callback("🎲 Would You Rather", `fun_question_${senderId}`), // <-- Added here
+      Markup.button.callback("🎲 Would You Rather", `fun_question_${senderId}`),
     ])
   );
 
@@ -626,6 +702,14 @@ async function showAdminStats(ctx) {
     createdAt: { $gte: today },
   });
 
+  // Referral stats
+  const usersWithReferrals = await usersCollection.countDocuments({
+    referralCount: { $gt: 0 },
+  });
+  const totalReferrals = await usersCollection.countDocuments({
+    referredBy: { $exists: true },
+  });
+
   const statsMessage = `
 📊 Bot Statistics:
     
@@ -633,6 +717,10 @@ async function showAdminStats(ctx) {
 ✅ Active Users: ${activeUsers}
 💞 Total Matches: ${totalMatches}
 🆕 New Users Today: ${newUsersToday}
+    
+📌 Referral Stats:
+🎁 Users with referrals: ${usersWithReferrals}
+👥 Total referrals: ${totalReferrals}
     `;
 
   await ctx.reply(statsMessage);
@@ -640,14 +728,173 @@ async function showAdminStats(ctx) {
 
 // Bot commands and handlers
 bot.start(async (ctx) => {
+  // Check for referral code in start parameter
+  const referralCode = ctx.startPayload;
+  const referrer = referralCode
+    ? await usersCollection.findOne({ referralCode })
+    : null;
+
+  // New user flow
+  if (!(await usersCollection.findOne({ telegramId: ctx.from.id }))) {
+    const newUserData = {
+      telegramId: ctx.from.id,
+      createdAt: new Date(),
+      active: true,
+      referralCredits: 0,
+      referralCount: 0,
+    };
+
+    if (referrer) {
+      // Update referrer's stats
+      await usersCollection.updateOne(
+        { telegramId: referrer.telegramId },
+        {
+          $inc: {
+            referralCount: 1,
+            referralCredits: 1,
+          },
+          $set: {
+            lastReferralAt: new Date(),
+          },
+        }
+      );
+
+      // Set referral info for new user
+      newUserData.referredBy = referrer.telegramId;
+      newUserData.referralCredits = 1; // New user also gets credit
+
+      // Notify both parties
+      await ctx.reply(
+        `🎉 You joined using ${referrer.name}'s referral link! You've received 1 premium match credit.`
+      );
+      await bot.telegram.sendMessage(
+        referrer.telegramId,
+        `🎊 ${ctx.from.first_name} joined using your referral link! You've earned 1 premium match credit.`
+      );
+    }
+
+    // Create new user
+    await usersCollection.insertOne(newUserData);
+  }
+
   await ctx.reply(
     `💖 Find people near you who share your vibes — in just 2 minutes!\n\nWelcome to the Dating Bot!\n\n\n\n v${version}`
   );
   await showMainMenu(ctx);
 });
+
+bot.command("referral", async (ctx) => {
+  const telegramId = ctx.from.id;
+  const user = await usersCollection.findOne({ telegramId });
+
+  if (!user) {
+    await ctx.reply("Please create a profile first with /start");
+    return;
+  }
+
+  // Generate a unique referral code if not exists
+  let referralCode = user.referralCode;
+  if (!referralCode) {
+    referralCode = `KONVO-${Math.random()
+      .toString(36)
+      .substring(2, 8)
+      .toUpperCase()}`;
+    await usersCollection.updateOne({ telegramId }, { $set: { referralCode } });
+  }
+
+  const referralMessage = `
+🎁 *Referral Program*
+
+Invite friends to join Konvo and earn rewards!
+
+Your referral code: \`${referralCode}\`
+
+🔗 Or use this link:
+https://t.me/${ctx.botInfo.username}?start=${referralCode}
+
+*How it works:*
+1. Share your code/link with friends
+2. When they join using your code, you both get:
+   - 💎 1 premium match (shown first in searches)
+   - 🔥 Priority in matching algorithms
+3. After 5 successful referrals:
+   - 🚀 Get featured in our "Popular Users" section
+
+Your stats:
+👥 Referrals: ${user.referralCount || 0}
+💎 Credits: ${user.referralCredits || 0}
+`;
+
+  await ctx.replyWithMarkdown(
+    referralMessage,
+    Markup.inlineKeyboard([
+      Markup.button.url(
+        "Share",
+        `https://t.me/share/url?url=https://t.me/${ctx.botInfo.username}?start=${referralCode}&text=Join%20Konvo%20dating%20bot%20with%20my%20referral%20code%20${referralCode}`
+      ),
+    ])
+  );
+});
+
 bot.command("version", (ctx) => {
   ctx.reply(`🤖 Bot version: v${version}`);
 });
+
+// Admin referral commands
+bot.command("referralstats", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) {
+    await ctx.reply("Unauthorized");
+    return;
+  }
+
+  const topReferrers = await usersCollection
+    .aggregate([
+      { $match: { referralCount: { $gt: 0 } } },
+      { $sort: { referralCount: -1 } },
+      { $limit: 10 },
+      { $project: { name: 1, referralCount: 1, telegramId: 1 } },
+    ])
+    .toArray();
+
+  let stats = "🏆 Top Referrers:\n\n";
+  topReferrers.forEach((user, index) => {
+    stats += `${index + 1}. ${user.name} (ID: ${user.telegramId}): ${
+      user.referralCount
+    } referrals\n`;
+  });
+
+  const totalReferrals = await usersCollection.countDocuments({
+    referredBy: { $exists: true },
+  });
+  stats += `\nTotal referrals: ${totalReferrals}`;
+
+  await ctx.reply(stats);
+});
+
+bot.command("addcredits", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) {
+    await ctx.reply("Unauthorized");
+    return;
+  }
+
+  const [_, telegramId, amount] = ctx.message.text.split(" ");
+  if (!telegramId || !amount) {
+    await ctx.reply("Usage: /addcredits [telegramId] [amount]");
+    return;
+  }
+
+  await usersCollection.updateOne(
+    { telegramId: parseInt(telegramId) },
+    { $inc: { referralCredits: parseInt(amount) } }
+  );
+
+  await ctx.reply(`Added ${amount} credits to user ${telegramId}`);
+  await bot.telegram.sendMessage(
+    telegramId,
+    `🎉 Admin has granted you ${amount} premium match credits!`
+  );
+});
+
 // User menu commands
 bot.hears("🔍 Find Match", async (ctx) => {
   await findMatch(ctx);
@@ -671,6 +918,17 @@ bot.hears("🚪 Deactivate Profile", async (ctx) => {
   await ctx.reply(
     "Your profile has been deactivated. Use /start to reactivate it."
   );
+});
+
+bot.hears("🎁 Referral Program", async (ctx) => {
+  await ctx.scene.leave(); // Ensure we're not in any scene
+  await ctx.reply("Opening referral program...");
+  ctx.telegram.emit("command", "referral", ctx);
+});
+
+bot.action("show_referral", async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.telegram.emit("command", "referral", ctx);
 });
 
 // Admin menu commands
@@ -723,6 +981,7 @@ bot.hears("❤️ Who Liked Me", async (ctx) => {
     });
   }
 });
+
 // Handle inline buttons
 bot.action(/like_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
@@ -773,13 +1032,6 @@ bot.action(/like_(\d+)/, async (ctx) => {
     });
 
     await ctx.reply("Like sent! If they like you back, you'll be notified.");
-    await ctx.telegram.sendMessage(
-      likedId,
-      `${liker.name} liked you!`,
-      Markup.inlineKeyboard([
-        Markup.button.callback("💬 Message", `message_${likerId}`),
-      ])
-    );
   }
 
   await ctx.deleteMessage();
@@ -837,7 +1089,7 @@ bot.on("message", async (ctx) => {
         "What's something that always makes you smile?",
       ],
       "🧠 Deep Talk": [
-        "What’s a dream you’ve never said out loud?",
+        "What's a dream you've never said out loud?",
         "What do you value most in a friendship?",
         "If you could change one thing about the world, what would it be?",
       ],
@@ -994,8 +1246,6 @@ bot.catch((err, ctx) => {
   console.error("Error:", err);
   ctx.reply("An error occurred. Please try again.");
 });
-
-// Start the bot
 
 bot.action(/share_username_(\d+)/, async (ctx) => {
   const recipientId = parseInt(ctx.match[1]);
