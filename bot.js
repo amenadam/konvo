@@ -287,7 +287,10 @@ async function connectDB() {
     // Create index for location-based searches
     await usersCollection.createIndex({ location: "2dsphere" });
     // Create index for referral code
-    await usersCollection.createIndex({ referralCode: 1 }, { unique: true });
+    await usersCollection.createIndex(
+      { referralCode: 1 },
+      { unique: true, sparse: true }
+    );
 
     console.log("Connected to MongoDB");
   } catch (err) {
