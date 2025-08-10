@@ -770,10 +770,12 @@ bot.start(async (ctx) => {
       await ctx.reply(
         `🎉 You joined using ${referrer.name}'s referral link! You've received 1 premium match credit.`
       );
+
       await bot.telegram.sendMessage(
         referrer.telegramId,
         `🎊 ${ctx.from.first_name} joined using your referral link! You've earned 1 premium match credit.`
       );
+      return ctx.scene.enter("profile-wizard");
     }
 
     // Create new user
@@ -922,10 +924,9 @@ bot.hears("🚪 Deactivate Profile", async (ctx) => {
     "Your profile has been deactivated. Use /start to reactivate it."
   );
 });
-
 bot.hears("🎁 Referral Program", async (ctx) => {
   try {
-    await ctx.scene.leave(); // Ensure we're not in any scene
+    await ctx.scene.leave();
 
     const telegramId = ctx.from.id;
     const user = await usersCollection.findOne({ telegramId });
@@ -948,17 +949,18 @@ bot.hears("🎁 Referral Program", async (ctx) => {
       );
     }
 
+    // Using MarkdownV2 with proper escaping
     const referralMessage = `
-🎁 *Referral Program*
+<b>🎁 Referral Program</b>
 
 Invite friends to join Konvo and earn rewards!
 
-Your referral code: \`${referralCode}\`
+Your referral code: <code>${referralCode}</code>
 
 🔗 Or use this link:
 https://t.me/${ctx.botInfo.username}?start=${referralCode}
 
-*How it works:*
+<b>How it works:</b>
 1. Share your code/link with friends
 2. When they join using your code, you both get:
    - 💎 1 premium match (shown first in searches)
@@ -971,15 +973,14 @@ Your stats:
 💎 Credits: ${user.referralCredits || 0}
 `;
 
-    await ctx.replyWithMarkdown(
-      referralMessage,
-      Markup.inlineKeyboard([
-        Markup.button.url(
-          "Share",
-          `https://t.me/share/url?url=https://t.me/${ctx.botInfo.username}?start=${referralCode}&text=Join%20Konvo%20dating%20bot%20with%20my%20referral%20code%20${referralCode}`
-        ),
-      ])
-    );
+    const shareText = `Join Konvo dating bot with my referral code ${referralCode}\n\n🔗 https://t.me/${ctx.botInfo.username}?start=${referralCode}`;
+    const shareUrl = `https://t.me/share/url?text=${encodeURIComponent(
+      shareText
+    )}`;
+
+    await ctx.replyWithHTML(referralMessage, {
+      ...Markup.inlineKeyboard([Markup.button.url("📤 Share Now", shareUrl)]),
+    });
   } catch (err) {
     console.error("Error in referral program:", err);
     await ctx.reply(
