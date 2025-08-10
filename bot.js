@@ -924,9 +924,68 @@ bot.hears("🚪 Deactivate Profile", async (ctx) => {
 });
 
 bot.hears("🎁 Referral Program", async (ctx) => {
-  await ctx.scene.leave(); // Ensure we're not in any scene
-  await ctx.reply("Opening referral program...");
-  ctx.telegram.emit("command", "referral", ctx);
+  try {
+    await ctx.scene.leave(); // Ensure we're not in any scene
+
+    const telegramId = ctx.from.id;
+    const user = await usersCollection.findOne({ telegramId });
+
+    if (!user) {
+      await ctx.reply("Please create a profile first with /start");
+      return;
+    }
+
+    // Generate a unique referral code if not exists
+    let referralCode = user.referralCode;
+    if (!referralCode) {
+      referralCode = `KONVO-${Math.random()
+        .toString(36)
+        .substring(2, 8)
+        .toUpperCase()}`;
+      await usersCollection.updateOne(
+        { telegramId },
+        { $set: { referralCode } }
+      );
+    }
+
+    const referralMessage = `
+🎁 *Referral Program*
+
+Invite friends to join Konvo and earn rewards!
+
+Your referral code: \`${referralCode}\`
+
+🔗 Or use this link:
+https://t.me/${ctx.botInfo.username}?start=${referralCode}
+
+*How it works:*
+1. Share your code/link with friends
+2. When they join using your code, you both get:
+   - 💎 1 premium match (shown first in searches)
+   - 🔥 Priority in matching algorithms
+3. After 5 successful referrals:
+   - 🚀 Get featured in our "Popular Users" section
+
+Your stats:
+👥 Referrals: ${user.referralCount || 0}
+💎 Credits: ${user.referralCredits || 0}
+`;
+
+    await ctx.replyWithMarkdown(
+      referralMessage,
+      Markup.inlineKeyboard([
+        Markup.button.url(
+          "Share",
+          `https://t.me/share/url?url=https://t.me/${ctx.botInfo.username}?start=${referralCode}&text=Join%20Konvo%20dating%20bot%20with%20my%20referral%20code%20${referralCode}`
+        ),
+      ])
+    );
+  } catch (err) {
+    console.error("Error in referral program:", err);
+    await ctx.reply(
+      "An error occurred while opening the referral program. Please try again."
+    );
+  }
 });
 
 bot.action("show_referral", async (ctx) => {
