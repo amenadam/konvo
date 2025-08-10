@@ -641,12 +641,12 @@ async function showAdminStats(ctx) {
 // Bot commands and handlers
 bot.start(async (ctx) => {
   await ctx.reply(
-    "💖 Find people near you who share your vibes — in just 2 minutes!\n\nWelcome to the Dating Bot!"
+    `💖 Find people near you who share your vibes — in just 2 minutes!\n\nWelcome to the Dating Bot!\n\n\n\n🤖 Bot version: v${version}`
   );
   await showMainMenu(ctx);
 });
 bot.command("version", (ctx) => {
-  ctx.reply(`🤖 Bot version: ${version}`);
+  ctx.reply(`🤖 Bot version: v${version}`);
 });
 // User menu commands
 bot.hears("🔍 Find Match", async (ctx) => {
