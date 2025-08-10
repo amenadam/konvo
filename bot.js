@@ -641,7 +641,7 @@ async function showAdminStats(ctx) {
 // Bot commands and handlers
 bot.start(async (ctx) => {
   await ctx.reply(
-    `💖 Find people near you who share your vibes — in just 2 minutes!\n\nWelcome to the Dating Bot!\n\n\n\n🤖 Bot version: v${version}`
+    `💖 Find people near you who share your vibes — in just 2 minutes!\n\nWelcome to the Dating Bot!\n\n\n\n v${version}`
   );
   await showMainMenu(ctx);
 });
@@ -1025,6 +1025,7 @@ bot.action(/share_username_(\d+)/, async (ctx) => {
 
 async function startBot() {
   await connectDB();
+  await bot.telegram.setMyShortDescription(`🤖 v${version}`);
   await bot.launch();
   console.log("Dating bot is running...");
 }
