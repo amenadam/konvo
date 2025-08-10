@@ -672,18 +672,32 @@ async function sendBroadcast(ctx, message, keyboard = null) {
 
   for (const telegramId of telegramIds) {
     try {
+      let sentMessage;
       if (keyboard) {
-        await bot.telegram.sendMessage(telegramId, message, keyboard);
+        sentMessage = await bot.telegram.sendMessage(
+          telegramId,
+          message,
+          keyboard
+        );
       } else {
-        await bot.telegram.sendMessage(telegramId, message);
+        sentMessage = await bot.telegram.sendMessage(telegramId, message);
       }
       successCount++;
+
+      // Attempt to pin in each user's chat (if bot has admin rights)
+      try {
+        await bot.telegram.pinChatMessage(telegramId, sentMessage.message_id, {
+          disable_notification: true,
+        });
+      } catch (pinError) {
+        console.error(`Couldn't pin for ${telegramId}:`, pinError.message);
+      }
     } catch (err) {
       console.error(`Failed to send to ${telegramId}:`, err.message);
       failCount++;
     }
 
-    // Small delay to avoid rate limiting
+    // Rate limiting delay
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
@@ -691,7 +705,6 @@ async function sendBroadcast(ctx, message, keyboard = null) {
     `Broadcast completed!\nSuccess: ${successCount}\nFailed: ${failCount}`
   );
 }
-
 // Show admin stats
 async function showAdminStats(ctx) {
   const totalUsers = await usersCollection.countDocuments();
