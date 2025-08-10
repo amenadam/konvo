@@ -2,6 +2,7 @@ require("dotenv").config();
 const { Telegraf, Markup, Scenes, session } = require("telegraf");
 const { MongoClient } = require("mongodb");
 const geodist = require("geodist");
+const { version } = require("./package.json");
 
 // Database connection
 const client = new MongoClient(process.env.MONGODB_URI);
@@ -110,7 +111,7 @@ const editProfileWizard = new Scenes.WizardScene(
       "What would you like to edit?",
       Markup.keyboard([
         ["Name", "Age"],
-        ["Gender", "Interested In"],
+        ["Gender"],
         ["Bio", "Photo"],
         ["Location"],
         ["Cancel"],
@@ -644,7 +645,9 @@ bot.start(async (ctx) => {
   );
   await showMainMenu(ctx);
 });
-
+bot.command("version", (ctx) => {
+  ctx.reply(`🤖 Bot version: ${version}`);
+});
 // User menu commands
 bot.hears("🔍 Find Match", async (ctx) => {
   await findMatch(ctx);
@@ -770,6 +773,13 @@ bot.action(/like_(\d+)/, async (ctx) => {
     });
 
     await ctx.reply("Like sent! If they like you back, you'll be notified.");
+    await ctx.telegram.sendMessage(
+      likedId,
+      `${liker.name} liked you!`,
+      Markup.inlineKeyboard([
+        Markup.button.callback("💬 Message", `message_${likerId}`),
+      ])
+    );
   }
 
   await ctx.deleteMessage();
@@ -856,8 +866,6 @@ bot.on("message", async (ctx) => {
     await ctx.reply("Message sent!", Markup.removeKeyboard());
     return;
   }
-
-  // ...rest of your code (menu, etc)...
 });
 
 // In your fun_question handler, generate a unique questionKey and store mood in session
