@@ -1025,7 +1025,9 @@ bot.action(/share_username_(\d+)/, async (ctx) => {
 
 async function startBot() {
   await connectDB();
-  await bot.telegram.setMyShortDescription(`🤖 v${version}`);
+  await bot.telegram.setMyShortDescription(
+    `Welcome to Konvo — the easiest way to meet interesting people right here on Telegram.\n🤖 v${version}`
+  );
   await bot.launch();
   console.log("Dating bot is running...");
 }
