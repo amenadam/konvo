@@ -335,6 +335,12 @@ async function removeBlockedUsers(bot) {
           await usersCollection.deleteOne({ telegramId: user.telegramId });
           removedCount++;
           console.log(`Removed blocked user: ${user.telegramId}`);
+          if (ADMIN_IDS.length > 0) {
+            await bot.telegram.sendMessage(
+              ADMIN_IDS[0],
+              `Removed blocked user: ${user.telegramId}`
+            );
+          }
         } else {
           console.error(
             `Error checking user ${user.telegramId}:`,
