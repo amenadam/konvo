@@ -2,3 +2,5 @@ node_modules
 .env
 test.js
 fix.js
+users_id.txt
+post.js
