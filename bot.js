@@ -353,6 +353,12 @@ async function removeBlockedUsers(bot) {
     console.log(
       `Blocked users cleanup completed. Removed ${removedCount} users.`
     );
+    if (ADMIN_IDS.length > 0) {
+      await bot.telegram.sendMessage(
+        ADMIN_IDS[0],
+        `Blocked users cleanup completed. Removed ${removedCount} users.`
+      );
+    }
   } catch (err) {
     console.error("Error in removeBlockedUsers:", err);
   }
