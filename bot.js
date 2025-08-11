@@ -1146,36 +1146,71 @@ bot.hears("📢 Broadcast", async (ctx) => {
 });
 
 bot.hears("❤️ Who Liked Me", async (ctx) => {
-  const telegramId = ctx.from.id;
-  // Find users who liked me but I haven't liked/disliked them yet
-  const pendingLikes = await matchesCollection
-    .find({
-      telegramId2: telegramId,
-      status: "pending",
-    })
-    .toArray();
+  try {
+    const telegramId = ctx.from.id;
 
-  if (pendingLikes.length === 0) {
-    await ctx.reply("No one has liked you yet. Keep searching!");
-    return;
-  }
+    // First get all users I've removed
+    const myRemovedUsers = await matchesCollection
+      .find({
+        telegramId1: telegramId,
+        status: "removed",
+      })
+      .toArray();
+    const removedIds = myRemovedUsers.map((u) => u.telegramId2);
 
-  const likerIds = pendingLikes.map((m) => m.telegramId1);
-  const likers = await usersCollection
-    .find({ telegramId: { $in: likerIds } })
-    .toArray();
+    // Find users who liked me but I haven't liked/disliked/removed them yet
+    const pendingLikes = await matchesCollection
+      .find({
+        telegramId2: telegramId,
+        status: "pending",
+        telegramId1: { $nin: removedIds }, // Exclude removed users
+      })
+      .toArray();
 
-  for (const liker of likers) {
-    await ctx.replyWithPhoto(liker.photo, {
-      caption: `Name: ${liker.name}\nAge: ${liker.age}\nGender: ${liker.gender}\nBio: ${liker.bio}`,
-      ...Markup.inlineKeyboard([
-        Markup.button.callback("👍 Like Back", `like_${liker.telegramId}`),
-        Markup.button.callback("👎 Dislike", `dislike_${liker.telegramId}`),
-      ]),
-    });
+    if (pendingLikes.length === 0) {
+      await ctx.reply("No one has liked you yet. Keep searching!");
+      return;
+    }
+
+    const likerIds = pendingLikes.map((m) => m.telegramId1);
+    const likers = await usersCollection
+      .find({
+        telegramId: { $in: likerIds },
+        active: true,
+      })
+      .toArray();
+
+    if (likers.length === 0) {
+      await ctx.reply("No active users have liked you yet.");
+      return;
+    }
+
+    for (const liker of likers) {
+      await ctx.replyWithPhoto(
+        liker.photo || process.env.DEFAULT_PROFILE_PHOTO,
+        {
+          caption: `Name: ${liker.name}\nAge: ${liker.age}\nGender: ${
+            liker.gender
+          }\nBio: ${liker.bio || "No bio provided"}`,
+          ...Markup.inlineKeyboard([
+            Markup.button.callback("👍 Like Back", `like_${liker.telegramId}`),
+            Markup.button.callback("👎 Dislike", `dislike_${liker.telegramId}`),
+            Markup.button.callback("🚫 Remove", `remove_${liker.telegramId}`),
+          ]),
+        }
+      );
+    }
+  } catch (error) {
+    console.error("Error in Who Liked Me:", error);
+    await ctx.reply("An error occurred while loading who liked you.");
+    if (ADMIN_IDS.length > 0) {
+      await bot.telegram.sendMessage(
+        ADMIN_IDS[0],
+        `Error in Who Liked Me for ${ctx.from.id}: ${error.message}`
+      );
+    }
   }
 });
-
 bot.action(/view_profile_(\d+)/, async (ctx) => {
   try {
     await ctx.answerCbQuery();
@@ -1235,19 +1270,41 @@ bot.action(/remove_(\d+)/, async (ctx) => {
     const removerId = ctx.from.id;
     const removedId = parseInt(ctx.match[1]);
 
-    // Create a permanent remove record
-    await matchesCollection.insertOne({
-      telegramId1: removerId,
-      telegramId2: removedId,
-      status: "removed",
-      createdAt: new Date(),
+    // Check if they're currently matched
+    const existingMatch = await matchesCollection.findOne({
+      $or: [
+        { telegramId1: removerId, telegramId2: removedId, status: "matched" },
+        { telegramId1: removedId, telegramId2: removerId, status: "matched" },
+      ],
     });
 
+    if (existingMatch) {
+      // Update the existing match record to "removed" status
+      await matchesCollection.updateOne(
+        { _id: existingMatch._id },
+        { $set: { status: "removed" } }
+      );
+    } else {
+      // Create a new removal record
+      await matchesCollection.insertOne({
+        telegramId1: removerId,
+        telegramId2: removedId,
+        status: "removed",
+        createdAt: new Date(),
+      });
+    }
+
     await ctx.reply(
-      "This user has been removed from your potential matches and won't appear again."
+      "This user has been removed from your matches and won't appear again."
     );
     await ctx.deleteMessage();
-    await findMatch(ctx);
+
+    // If called from matches list, go back to matches
+    if (ctx.callbackQuery.message.text.includes("Your Matches")) {
+      await showMatches(ctx);
+    } else {
+      await findMatch(ctx);
+    }
   } catch (error) {
     console.error("Error in remove handler:", error);
     await ctx.answerCbQuery("Failed to remove user. Please try again.");
