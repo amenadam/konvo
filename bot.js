@@ -1006,9 +1006,9 @@ async function showAdminStats(ctx) {
   try {
     const totalUsers = await usersCollection.countDocuments();
     const activeUsers = await usersCollection.countDocuments({ active: true });
-    const maleUsers = await usersCollection.countDocuments({ Gender: "Male" });
+    const maleUsers = await usersCollection.countDocuments({ gender: "Male" });
     const femaleUsers = await usersCollection.countDocuments({
-      Gender: "Female",
+      gender: "Female",
     });
     const totalMatches = await matchesCollection.countDocuments({
       status: "matched",
