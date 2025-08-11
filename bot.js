@@ -1273,9 +1273,10 @@ bot.action(/remove_(\d+)/, async (ctx) => {
     // Check if they're currently matched
     const existingMatch = await matchesCollection.findOne({
       $or: [
-        { telegramId1: removerId, telegramId2: removedId, status: "matched" },
-        { telegramId1: removedId, telegramId2: removerId, status: "matched" },
+        { telegramId1: removerId, telegramId2: removedId },
+        { telegramId1: removedId, telegramId2: removerId },
       ],
+      status: { $in: ["matched", "pending"] },
     });
 
     if (existingMatch) {
@@ -1299,8 +1300,13 @@ bot.action(/remove_(\d+)/, async (ctx) => {
     );
     await ctx.deleteMessage();
 
-    // If called from matches list, go back to matches
-    if (ctx.callbackQuery.message.text.includes("Your Matches")) {
+    // Check if we're in the matches list context more safely
+    const callbackMessage = ctx.callbackQuery?.message;
+    if (
+      callbackMessage &&
+      "text" in callbackMessage &&
+      callbackMessage.text.includes("Your Matches")
+    ) {
       await showMatches(ctx);
     } else {
       await findMatch(ctx);
