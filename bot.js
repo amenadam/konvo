@@ -536,12 +536,21 @@ async function showMatches(ctx) {
       return ctx.scene.enter("profile-wizard");
     }
 
-    // Find all matches where status is "matched"
+    // Find all matches where status is "matched" and not removed
     const matches = await matchesCollection
       .find({
         $or: [
           { telegramId1: telegramId, status: "matched" },
           { telegramId2: telegramId, status: "matched" },
+        ],
+        // Exclude matches where the user has been removed
+        $and: [
+          {
+            $nor: [
+              { telegramId1: telegramId, status: "removed" },
+              { telegramId2: telegramId, status: "removed" },
+            ],
+          },
         ],
       })
       .toArray();
@@ -551,11 +560,31 @@ async function showMatches(ctx) {
       return;
     }
 
+    // Get all removed users to filter out
+    const removedUsers = await matchesCollection
+      .find({
+        $or: [
+          { telegramId1: telegramId, status: "removed" },
+          { telegramId2: telegramId, status: "removed" },
+        ],
+      })
+      .toArray();
+
+    const removedIds = removedUsers.map((record) =>
+      record.telegramId1 === telegramId
+        ? record.telegramId2
+        : record.telegramId1
+    );
+
     for (const match of matches) {
       const matchId =
         match.telegramId1 === telegramId
           ? match.telegramId2
           : match.telegramId1;
+
+      // Skip if this user is in the removed list
+      if (removedIds.includes(matchId)) continue;
+
       const matchedUser = await usersCollection.findOne({
         telegramId: matchId,
       });
