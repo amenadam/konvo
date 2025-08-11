@@ -1572,18 +1572,22 @@ bot.action(/share_username_(\d+)/, async (ctx) => {
   const userId = ctx.from.id;
   const partnerId = parseInt(ctx.match[1]);
 
-  const user = await usersCollection.findOne({ telegramId: userId });
-  if (!user.username) {
+  // Get username directly from the chat context instead of database
+  const username = ctx.from.username;
+  if (!username) {
     await ctx.reply("You don't have a Telegram username set in your profile.");
     return;
   }
 
+  // Get name from context if available, otherwise use first_name
+  const name = ctx.from.first_name || "User";
+
   await bot.telegram.sendMessage(
     partnerId,
-    `${user.name} (@${user.username}) has shared their username with you!`
+    `${name} (@${username}) has shared their username with you!`
   );
 
-  await ctx.reply(`Your username @${user.username} has been shared.`);
+  await ctx.reply(`Your username @${username} has been shared.`);
 });
 
 // ===================== DISTANCE FILTER HANDLER =====================
