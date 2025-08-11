@@ -1006,9 +1006,12 @@ async function showAdminStats(ctx) {
   try {
     const totalUsers = await usersCollection.countDocuments();
     const activeUsers = await usersCollection.countDocuments({ active: true });
-    const maleUsers = await usersCollection.countDocuments({ gender: "Male" });
+    const maleUsers = await usersCollection.countDocuments({
+      gender: { $in: ["Male", "male"] },
+    });
+
     const femaleUsers = await usersCollection.countDocuments({
-      gender: "Female",
+      gender: { $in: ["Female", "female"] },
     });
     const totalMatches = await matchesCollection.countDocuments({
       status: "matched",
@@ -1537,7 +1540,7 @@ async function startBot() {
   await connectDB();
 
   // Start photo reminder broadcast on a schedule
-  setInterval(sendPhotoReminderBroadcast, 24 * 60 * 60 * 1000); // Daily
+  //setInterval(sendPhotoReminderBroadcast, 24 * 60 * 60 * 1000); // Daily
 
   await bot.launch();
   console.log("Bot started successfully");
