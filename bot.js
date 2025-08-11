@@ -379,25 +379,36 @@ async function findMatch(ctx, maxDistance = 50) {
     else if (user.interestedIn === "Female") interestedGender = "Female";
     else interestedGender = { $in: ["Male", "Female"] };
 
-    // Find users who match the criteria
-    const alreadyMatched = await matchesCollection
+    // Find all matches where current user has disliked someone or been disliked
+    const dislikeRecords = await matchesCollection
       .find({
-        $or: [{ telegramId1: telegramId }, { telegramId2: telegramId }],
+        $or: [
+          { telegramId1: telegramId, status: "disliked" }, // Users I've disliked
+          { telegramId2: telegramId, status: "disliked" }, // Users who disliked me
+        ],
       })
       .toArray();
 
     const excludedtelegramIds = [
       telegramId,
-      ...alreadyMatched
-        .filter(
-          (m) =>
-            m.status === "matched" ||
-            m.status === "disliked" ||
-            (m.status === "pending" && m.telegramId1 === telegramId)
-        )
-        .map((m) =>
-          m.telegramId1 === telegramId ? m.telegramId2 : m.telegramId1
-        ),
+      ...dislikeRecords.map((record) =>
+        record.telegramId1 === telegramId
+          ? record.telegramId2
+          : record.telegramId1
+      ),
+      // Also exclude users I've already matched with or liked
+      ...(
+        await matchesCollection
+          .find({
+            $or: [{ telegramId1: telegramId }, { telegramId2: telegramId }],
+            status: { $in: ["matched", "pending"] },
+          })
+          .toArray()
+      ).map((record) =>
+        record.telegramId1 === telegramId
+          ? record.telegramId2
+          : record.telegramId1
+      ),
     ];
 
     // Base query
@@ -464,24 +475,36 @@ async function findPremiumMatch(user, telegramId) {
     else if (user.interestedIn === "Female") interestedGender = "Female";
     else interestedGender = { $in: ["Male", "Female"] };
 
-    const alreadyMatched = await matchesCollection
+    // Find all dislike records
+    const dislikeRecords = await matchesCollection
       .find({
-        $or: [{ telegramId1: telegramId }, { telegramId2: telegramId }],
+        $or: [
+          { telegramId1: telegramId, status: "disliked" },
+          { telegramId2: telegramId, status: "disliked" },
+        ],
       })
       .toArray();
 
     const excludedtelegramIds = [
       telegramId,
-      ...alreadyMatched
-        .filter(
-          (m) =>
-            m.status === "matched" ||
-            m.status === "disliked" ||
-            (m.status === "pending" && m.telegramId1 === telegramId)
-        )
-        .map((m) =>
-          m.telegramId1 === telegramId ? m.telegramId2 : m.telegramId1
-        ),
+      ...dislikeRecords.map((record) =>
+        record.telegramId1 === telegramId
+          ? record.telegramId2
+          : record.telegramId1
+      ),
+      // Also exclude existing matches
+      ...(
+        await matchesCollection
+          .find({
+            $or: [{ telegramId1: telegramId }, { telegramId2: telegramId }],
+            status: { $in: ["matched", "pending"] },
+          })
+          .toArray()
+      ).map((record) =>
+        record.telegramId1 === telegramId
+          ? record.telegramId2
+          : record.telegramId1
+      ),
     ];
 
     return await usersCollection.findOne({
@@ -675,13 +698,31 @@ bot.action(/dislike_(\d+)/, async (ctx) => {
     const dislikerId = ctx.from.id;
     const dislikedId = parseInt(ctx.match[1]);
 
-    // Record the dislike
-    await matchesCollection.insertOne({
-      telegramId1: dislikerId,
-      telegramId2: dislikedId,
-      status: "disliked",
-      createdAt: new Date(),
+    // Check if this dislike already exists
+    const existingDislike = await matchesCollection.findOne({
+      $or: [
+        {
+          telegramId1: dislikerId,
+          telegramId2: dislikedId,
+          status: "disliked",
+        },
+        {
+          telegramId1: dislikedId,
+          telegramId2: dislikerId,
+          status: "disliked",
+        },
+      ],
     });
+
+    if (!existingDislike) {
+      // Record the dislike
+      await matchesCollection.insertOne({
+        telegramId1: dislikerId,
+        telegramId2: dislikedId,
+        status: "disliked",
+        createdAt: new Date(),
+      });
+    }
 
     await ctx.deleteMessage();
     await findMatch(ctx);
