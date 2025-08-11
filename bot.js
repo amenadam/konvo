@@ -804,10 +804,10 @@ async function handleMessage(ctx, recipientId, text) {
           "🔗 Share My Username",
           `share_username_${senderId}`
         ),
-        Markup.button.callback(
-          "🎲 Would You Rather",
-          `fun_question_${senderId}`
-        ),
+        //Markup.button.callback(
+        //"🎲 Would You Rather",
+        //`fun_question_${senderId}`
+        //),
       ])
     );
 
@@ -1237,7 +1237,7 @@ bot.action(/message_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
   const recipientId = parseInt(ctx.match[1]);
   ctx.session.conversationPartner = recipientId;
-  await ctx.reply(`Type your message to send to ${recipientId}:`);
+  await ctx.reply(`Type your message to send:`);
 });
 
 bot.on("text", async (ctx) => {
@@ -1264,7 +1264,7 @@ bot.action(/fun_question_(\d+)/, async (ctx) => {
   wyrAnswers[ctx.from.id] = { question: randomQuestion, partnerId };
 
   await ctx.reply(
-    `🤔 Would You Rather (with ${partnerId}):\n\n${randomQuestion}`,
+    `🤔 Would You Rather :\n\n${randomQuestion}`,
     Markup.inlineKeyboard([
       Markup.button.callback("Option A", "wyr_option_a"),
       Markup.button.callback("Option B", "wyr_option_b"),
