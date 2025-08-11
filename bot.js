@@ -355,6 +355,13 @@ async function findMatch(ctx, maxDistance = 50) {
       await ctx.reply("Please create a profile first.");
       return ctx.scene.enter("profile-wizard");
     }
+    // Get all users to exclude
+    const excludedRecords = await matchesCollection
+      .find({
+        $or: [{ telegramId1: telegramId }, { telegramId2: telegramId }],
+        status: { $in: ["disliked", "removed", "matched", "pending"] },
+      })
+      .toArray();
 
     // Check for premium matches first if user has credits
     if (user.referralCredits > 0) {
@@ -391,7 +398,7 @@ async function findMatch(ctx, maxDistance = 50) {
 
     const excludedtelegramIds = [
       telegramId,
-      ...dislikeRecords.map((record) =>
+      ...excludedRecords.map((record) =>
         record.telegramId1 === telegramId
           ? record.telegramId2
           : record.telegramId1
@@ -608,7 +615,7 @@ async function showMatch(ctx, match) {
       ...Markup.inlineKeyboard([
         Markup.button.callback("👍 Like", `like_${match.telegramId}`),
         Markup.button.callback("👎 Dislike", `dislike_${match.telegramId}`),
-        Markup.button.callback("📍 Distance Filter", "distance_filter"),
+        Markup.button.callback("🚫 Remove", `remove_${match.telegramId}`),
         Markup.button.callback("💬 Message", `message_${match.telegramId}`),
       ]),
     });
@@ -1193,7 +1200,36 @@ bot.action(/view_profile_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery("Failed to view profile. Please try again.");
   }
 });
+bot.action(/remove_(\d+)/, async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    const removerId = ctx.from.id;
+    const removedId = parseInt(ctx.match[1]);
 
+    // Create a permanent remove record
+    await matchesCollection.insertOne({
+      telegramId1: removerId,
+      telegramId2: removedId,
+      status: "removed",
+      createdAt: new Date(),
+    });
+
+    await ctx.reply(
+      "This user has been removed from your potential matches and won't appear again."
+    );
+    await ctx.deleteMessage();
+    await findMatch(ctx);
+  } catch (error) {
+    console.error("Error in remove handler:", error);
+    await ctx.answerCbQuery("Failed to remove user. Please try again.");
+    if (ADMIN_IDS.length > 0) {
+      await bot.telegram.sendMessage(
+        ADMIN_IDS[0],
+        `Error in remove handler for ${ctx.from.id}: ${error.message}`
+      );
+    }
+  }
+});
 // ===================== REFERRAL PROGRAM =====================
 bot.hears("🎁 Referral Program", async (ctx) => {
   const telegramId = ctx.from.id;
