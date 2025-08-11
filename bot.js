@@ -1006,6 +1006,10 @@ async function showAdminStats(ctx) {
   try {
     const totalUsers = await usersCollection.countDocuments();
     const activeUsers = await usersCollection.countDocuments({ active: true });
+    const maleUsers = await usersCollection.countDocuments({ Gender: "Male" });
+    const femaleUsers = await usersCollection.countDocuments({
+      Gender: "Female",
+    });
     const totalMatches = await matchesCollection.countDocuments({
       status: "matched",
     });
@@ -1030,6 +1034,9 @@ async function showAdminStats(ctx) {
 ✅ Active Users: ${activeUsers}
 💞 Total Matches: ${totalMatches}
 🆕 New Users Today: ${newUsersToday}
+
+male users: ${maleUsers}
+Female users: ${FemaleUsers}
     
 📌 Referral Stats:
 🎁 Users with referrals: ${usersWithReferrals}
