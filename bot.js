@@ -1298,15 +1298,21 @@ bot.action(/remove_(\d+)/, async (ctx) => {
     await ctx.reply(
       "This user has been removed from your matches and won't appear again."
     );
-    await ctx.deleteMessage();
 
-    // Check if we're in the matches list context more safely
+    // Safely attempt to delete the message
+    try {
+      await ctx.deleteMessage();
+    } catch (deleteError) {
+      console.log("Could not delete message:", deleteError.message);
+    }
+
+    // Determine where to go next based on the context
     const callbackMessage = ctx.callbackQuery?.message;
-    if (
-      callbackMessage &&
-      "text" in callbackMessage &&
-      callbackMessage.text.includes("Your Matches")
-    ) {
+    const isFromMatchesList =
+      callbackMessage?.caption?.includes("Your Matches") ||
+      callbackMessage?.text?.includes("Your Matches");
+
+    if (isFromMatchesList) {
       await showMatches(ctx);
     } else {
       await findMatch(ctx);
