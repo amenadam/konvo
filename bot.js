@@ -79,19 +79,27 @@ const profileWizard = new Scenes.WizardScene(
     // Save profile to database
     const telegramId = ctx.from.id;
     const profile = {
-      telegramId,
+      telegramId: ctx.from.id,
       name: ctx.wizard.state.name,
       age: ctx.wizard.state.age,
       gender: ctx.wizard.state.gender,
       interestedIn: ctx.wizard.state.interestedIn,
       bio: ctx.wizard.state.bio,
-      photo: ctx.wizard.state.photo,
+      photo: ctx.message.photo[0].file_id,
       city: ctx.wizard.state.city,
       location: ctx.wizard.state.location,
       active: true,
+      registrationComplete: true,
       createdAt: new Date(),
-      referralCredits: ctx.wizard.state.referralCredits || 0,
-      referredBy: ctx.wizard.state.referredBy || null,
+      referralCredits:
+        ctx.wizard.state.referralCredits ||
+        ctx.scene.session.referralCredits ||
+        0,
+      referredBy:
+        ctx.wizard.state.referredBy || ctx.scene.session.referredBy || null,
+      username: ctx.from.username,
+      firstName: ctx.from.first_name,
+      lastName: ctx.from.last_name,
     };
 
     // Generate referral code if not exists
@@ -102,8 +110,9 @@ const profileWizard = new Scenes.WizardScene(
         .toUpperCase()}`;
     }
 
+    // Full profile update
     await usersCollection.updateOne(
-      { telegramId },
+      { telegramId: ctx.from.id },
       { $set: profile },
       { upsert: true }
     );
@@ -1061,15 +1070,28 @@ bot.start(async (ctx) => {
       ? await usersCollection.findOne({ referralCode })
       : null;
 
-    if (!(await usersCollection.findOne({ telegramId: ctx.from.id }))) {
-      const newUserData = {
+    const existingUser = await usersCollection.findOne({
+      telegramId: ctx.from.id,
+    });
+
+    if (!existingUser) {
+      // Create temporary user data with referral info
+      const tempUserData = {
         telegramId: ctx.from.id,
+        username: ctx.from.username,
+        firstName: ctx.from.first_name,
+        lastName: ctx.from.last_name,
         createdAt: new Date(),
-        active: true,
-        referralCredits: 0,
-        referralCount: 0,
+        active: false, // Not active until profile complete
+        registrationComplete: false,
+        referralCredits: referrer ? 1 : 0,
+        referredBy: referrer?.telegramId || null,
       };
 
+      // Store temporary data
+      await usersCollection.insertOne(tempUserData);
+
+      // Handle referral notifications
       if (referrer) {
         await usersCollection.updateOne(
           { telegramId: referrer.telegramId },
@@ -1079,9 +1101,6 @@ bot.start(async (ctx) => {
           }
         );
 
-        newUserData.referredBy = referrer.telegramId;
-        newUserData.referralCredits = 1;
-
         await ctx.reply(
           `🎉 You joined using ${referrer.name}'s referral link! You've received 1 premium match credit.`
         );
@@ -1089,22 +1108,35 @@ bot.start(async (ctx) => {
           referrer.telegramId,
           `🎊 ${ctx.from.first_name} joined using your referral link! You've earned 1 premium match credit.`
         );
-        return ctx.scene.enter("profile-wizard");
       }
 
-      await ctx.scene.enter("profile-wizard");
+      // Enter profile wizard with referral credits preserved
+      return ctx.scene.enter("profile-wizard", {
+        referralCredits: tempUserData.referralCredits,
+        referredBy: tempUserData.referredBy,
+      });
+    } else if (!existingUser.registrationComplete) {
+      // Continue registration if incomplete
+      return ctx.scene.enter("profile-wizard", {
+        referralCredits: existingUser.referralCredits,
+        referredBy: existingUser.referredBy,
+      });
     }
 
-    await ctx.reply(
-      `💖 Find people near you who share your vibes — in just 2 minutes!\n\nWelcome to the Dating Bot!\n\n\n\n v${version}`
-    );
+    // For registered users
+    await ctx.reply(`Welcome back, ${existingUser.name}!`);
     await showMainMenu(ctx);
   } catch (error) {
-    console.error("Error in start command:", error);
-    await ctx.reply("An error occurred during startup. Please try again.");
+    console.error("Start command error:", error);
+    await ctx.reply("Error starting the bot. Please try again.");
+    if (ADMIN_IDS.length > 0) {
+      await bot.telegram.sendMessage(
+        ADMIN_IDS[0],
+        `Start error for ${ctx.from.id}: ${error.message}`
+      );
+    }
   }
 });
-
 bot.command("version", (ctx) => {
   ctx.reply(`🤖 Bot version: v${version}`);
 });
