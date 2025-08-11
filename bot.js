@@ -13,7 +13,7 @@ let db,
   adminCollection;
 
 // Initialize bot
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf(process.env.TEST_BOT_TOKEN);
 const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(Number)
   : [];
@@ -792,7 +792,7 @@ bot.start(async (ctx) => {
     }
 
     // Create new user
-    await usersCollection.insertOne(newUserData);
+    await ctx.scene.enter("profile-wizard");
   }
 
   await ctx.reply(
