@@ -1189,7 +1189,48 @@ bot.action(/message_(\d+)/, async (ctx) => {
   );
   ctx.session.waitingForMood = true;
 });
+bot.action(/view_profile_(\d+)/, async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    const profileId = parseInt(ctx.match[1]);
+    const user = await usersCollection.findOne({ telegramId: profileId });
 
+    if (!user) {
+      return ctx.reply("Profile no longer exists");
+    }
+
+    let distanceInfo = "";
+    if (ctx.user.location && user.location) {
+      const distance = geodist(
+        {
+          lat: ctx.user.location.coordinates[1],
+          lon: ctx.user.location.coordinates[0],
+        },
+        {
+          lat: user.location.coordinates[1],
+          lon: user.location.coordinates[0],
+        },
+        { unit: "km" }
+      );
+      distanceInfo = `\nDistance: ~${Math.round(distance)} km`;
+    }
+
+    const caption = `👤 ${user.name} (${user.age})\n${user.bio}${distanceInfo}`;
+
+    await ctx.replyWithPhoto(user.photo || process.env.DEFAULT_PROFILE_PHOTO, {
+      caption: caption,
+      reply_markup: {
+        inline_keyboard: [
+          [Markup.button.callback("💌 Message", `message_${user.telegramId}`)],
+          [Markup.button.callback("🔙 Back", "back_to_matches")],
+        ],
+      },
+    });
+  } catch (error) {
+    console.error("Error in view profile:", error);
+    await ctx.answerCbQuery("Error loading profile");
+  }
+});
 // When user selects a mood, prompt for message, then send message on next input
 bot.on("message", async (ctx) => {
   // Step 1: User selects mood
