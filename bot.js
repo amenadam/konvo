@@ -1018,10 +1018,10 @@ bot.start(async (ctx) => {
   }
 });
 
-// ... (other commands remain similar but with added error handling)
 bot.command("version", (ctx) => {
   ctx.reply(`🤖 Bot version: v${version}`);
 });
+
 // User menu commands
 bot.hears("🔍 Find Match", async (ctx) => {
   await findMatch(ctx);
@@ -1067,6 +1067,7 @@ bot.hears("📢 Broadcast", async (ctx) => {
   }
   await ctx.scene.enter("broadcast-wizard");
 });
+
 bot.hears("❤️ Who Liked Me", async (ctx) => {
   const telegramId = ctx.from.id;
   // Find users who liked me but I haven't liked/disliked them yet
@@ -1098,342 +1099,270 @@ bot.hears("❤️ Who Liked Me", async (ctx) => {
   }
 });
 
-bot.action(/like_(\d+)/, async (ctx) => {
-  await ctx.answerCbQuery();
-  const likerId = ctx.from.id;
-  const likedId = parseInt(ctx.match[1]);
-
-  // Check if the liked user has already liked the current user
-  const existingMatch = await matchesCollection.findOne({
-    $or: [
-      { telegramId1: likedId, telegramId2: likerId },
-      { telegramId1: likerId, telegramId2: likedId },
-    ],
-  });
-
-  if (existingMatch) {
-    if (
-      existingMatch.telegramId1 === likedId &&
-      existingMatch.status === "pending"
-    ) {
-      // It's a match!
-      await matchesCollection.updateOne(
-        { _id: existingMatch._id },
-        { $set: { status: "matched", matchedAt: new Date() } }
-      );
-
-      // Notify both users
-      const liker = await usersCollection.findOne({ telegramId: likerId });
-      const liked = await usersCollection.findOne({ telegramId: likedId });
-
-      await ctx.reply(
-        `It's a match! You and ${liked.name} have liked each other.`
-      );
-      await ctx.telegram.sendMessage(
-        likedId,
-        `It's a match! You and ${liker.name} have liked each other.`,
-        Markup.inlineKeyboard([
-          Markup.button.callback("💬 Message", `message_${likerId}`),
-        ])
-      );
-    }
-  } else {
-    // Create a new pending match
-    await matchesCollection.insertOne({
-      telegramId1: likerId,
-      telegramId2: likedId,
-      status: "pending",
-      createdAt: new Date(),
-    });
-
-    await ctx.reply("Like sent! If they like you back, you'll be notified.");
-    await ctx.telegram.sendMessage(
-      likedId,
-      `${liker.name} liked you!`,
-      Markup.inlineKeyboard([
-        Markup.button.callback("💬 Message", `message_${likerId}`),
-      ])
-    );
-  }
-
-  await ctx.deleteMessage();
-  await findMatch(ctx);
-});
-
-bot.action(/dislike_(\d+)/, async (ctx) => {
-  const dislikerId = ctx.from.id;
-  const dislikedId = parseInt(ctx.match[1]);
-
-  // Record the dislike
-  await matchesCollection.insertOne({
-    telegramId1: dislikerId,
-    telegramId2: dislikedId,
-    status: "disliked",
-    createdAt: new Date(),
-  });
-
-  await ctx.deleteMessage();
-  await findMatch(ctx);
-});
-
-bot.action(/message_(\d+)/, async (ctx) => {
-  const recipientId = parseInt(ctx.match[1]);
-  ctx.session.recipientId = recipientId;
-
-  // Ask for mood
-  await ctx.reply(
-    "Choose your mood for this message:",
-    Markup.keyboard([["😏 Flirty", "😊 Friendly", "🧠 Deep Talk"]])
-      .oneTime()
-      .resize()
-  );
-  ctx.session.waitingForMood = true;
-});
 bot.action(/view_profile_(\d+)/, async (ctx) => {
   try {
     await ctx.answerCbQuery();
     const profileId = parseInt(ctx.match[1]);
-    const user = await usersCollection.findOne({ telegramId: profileId });
+    const profile = await usersCollection.findOne({ telegramId: profileId });
 
-    if (!user) {
-      return ctx.reply("Profile no longer exists");
+    if (!profile) {
+      await ctx.reply("Profile not found.");
+      return;
     }
 
     let distanceInfo = "";
-    if (ctx.user.location && user.location) {
+    const user = await usersCollection.findOne({ telegramId: ctx.from.id });
+
+    if (user.location && profile.location) {
       const distance = geodist(
-        {
-          lat: ctx.user.location.coordinates[1],
-          lon: ctx.user.location.coordinates[0],
-        },
         {
           lat: user.location.coordinates[1],
           lon: user.location.coordinates[0],
         },
+        {
+          lat: profile.location.coordinates[1],
+          lon: profile.location.coordinates[0],
+        },
         { unit: "km" }
       );
       distanceInfo = `\nDistance: ~${Math.round(distance)} km`;
+    } else if (profile.city) {
+      distanceInfo = `\nLocation: ${profile.city}`;
     }
 
-    const caption = `👤 ${user.name} (${user.age})\n${user.bio}${distanceInfo}`;
+    const caption = `Name: ${profile.name || "Unknown"}\nAge: ${
+      profile.age || "Not specified"
+    }\nGender: ${profile.gender || "Not specified"}\nBio: ${
+      profile.bio || "No bio provided"
+    }${distanceInfo}`;
 
-    await ctx.replyWithPhoto(user.photo || process.env.DEFAULT_PROFILE_PHOTO, {
-      caption: caption,
-      reply_markup: {
-        inline_keyboard: [
-          [Markup.button.callback("💌 Message", `message_${user.telegramId}`)],
-          [Markup.button.callback("🔙 Back", "back_to_matches")],
-        ],
-      },
-    });
-  } catch (error) {
-    console.error("Error in view profile:", error);
-    await ctx.answerCbQuery("Error loading profile");
-  }
-});
-// When user selects a mood, prompt for message, then send message on next input
-bot.on("message", async (ctx) => {
-  // Step 1: User selects mood
-  if (ctx.session.waitingForMood && ctx.session.recipientId) {
-    ctx.session.lastMood = ctx.message.text;
-    ctx.session.waitingForMood = false;
-    ctx.session.waitingForMessage = true;
-
-    // Mood-based recommendations
-    const moodSuggestions = {
-      "😏 Flirty": [
-        "If you could take me on a date anywhere, where would it be?",
-        "What's your most charming quality?",
-        "Should we skip the small talk and flirt a little? 😉",
-      ],
-      "😊 Friendly": [
-        "What's your favorite way to spend a weekend?",
-        "If you could have any superpower, what would it be?",
-        "What's something that always makes you smile?",
-      ],
-      "🧠 Deep Talk": [
-        "What’s a dream you’ve never said out loud?",
-        "What do you value most in a friendship?",
-        "If you could change one thing about the world, what would it be?",
-      ],
-    };
-    const mood = ctx.session.lastMood;
-    const suggestions = moodSuggestions[mood] || [];
-    const randomSuggestion =
-      suggestions.length > 0
-        ? suggestions[Math.floor(Math.random() * suggestions.length)]
-        : "Say hi!";
-
-    await ctx.reply(
-      "Type your message:",
-      Markup.keyboard([[randomSuggestion]])
-        .oneTime()
-        .resize()
+    await ctx.replyWithPhoto(
+      profile.photo || process.env.DEFAULT_PROFILE_PHOTO,
+      {
+        caption: caption,
+        ...Markup.inlineKeyboard([
+          Markup.button.callback("👍 Like", `like_${profile.telegramId}`),
+          Markup.button.callback("👎 Dislike", `dislike_${profile.telegramId}`),
+          Markup.button.callback("💬 Message", `message_${profile.telegramId}`),
+        ]),
+      }
     );
-    return;
-  }
-
-  // Step 2: User sends actual message
-  if (ctx.session.waitingForMessage && ctx.session.recipientId) {
-    await handleMessage(ctx, ctx.session.recipientId, ctx.message.text);
-    ctx.session.waitingForMessage = false;
-    ctx.session.recipientId = null;
-    await ctx.reply("Message sent!", Markup.removeKeyboard());
-    return;
+  } catch (error) {
+    console.error("Error in view_profile handler:", error);
+    await ctx.answerCbQuery("Failed to view profile. Please try again.");
   }
 });
 
-// In your fun_question handler, generate a unique questionKey and store mood in session
-bot.action(/fun_question_(\d+)/, async (ctx) => {
-  const recipientId = parseInt(ctx.match[1]);
-  const senderId = ctx.from.id;
+// ===================== REFERRAL PROGRAM =====================
+bot.hears("🎁 Referral Program", async (ctx) => {
+  const telegramId = ctx.from.id;
+  const user = await usersCollection.findOne({ telegramId });
 
-  // Would You Rather questions
-  const wouldYouRather = [
-    {
-      q: "Would you rather be able to fly or be invisible?",
-      a: ["Fly", "Invisible"],
-    },
-    {
-      q: "Would you rather always have to sing instead of speak or dance everywhere you go?",
-      a: ["Sing", "Dance"],
-    },
-    {
-      q: "Would you rather travel to the past or the future?",
-      a: ["Past", "Future"],
-    },
-    {
-      q: "Would you rather never use social media again or never watch another movie?",
-      a: ["No social media", "No movies"],
-    },
-    {
-      q: "Would you rather have pizza or burgers for the rest of your life?",
-      a: ["Pizza", "Burgers"],
-    },
-    {
-      q: "Would you rather be able to talk to animals or speak every language?",
-      a: ["Talk to animals", "Speak every language"],
-    },
-    {
-      q: "Would you rather always be 10 minutes late or always be 20 minutes early?",
-      a: ["10 min late", "20 min early"],
-    },
-    {
-      q: "Would you rather live by the beach or in the mountains?",
-      a: ["Beach", "Mountains"],
-    },
-    {
-      q: "Would you rather have unlimited free travel or never have to pay for food at restaurants?",
-      a: ["Free travel", "Free food"],
-    },
-    {
-      q: "Would you rather be able to teleport anywhere or read minds?",
-      a: ["Teleport", "Read minds"],
-    },
+  if (!user) {
+    await ctx.reply("Please create a profile first.");
+    return ctx.scene.enter("profile-wizard");
+  }
+
+  const referralMessage = `🎁 Referral Program 🎁
+
+Invite friends and earn premium match credits!
+
+Your referral code: ${user.referralCode}
+
+How it works:
+1. Share your referral link below
+2. When someone joins using your link:
+   - You get 1 premium match credit
+   - They get 1 premium match credit
+3. Premium matches are shown first to other premium users
+
+Your credits: ${user.referralCredits || 0}
+People you've referred: ${user.referralCount || 0}`;
+
+  const referralLink = `https://t.me/${
+    (await bot.telegram.getMe()).username
+  }?start=${user.referralCode}`;
+
+  await ctx.reply(
+    referralMessage,
+    Markup.inlineKeyboard([
+      Markup.button.url(
+        "📤 Share Referral Link",
+        `https://t.me/share/url?url=${encodeURIComponent(
+          referralLink
+        )}&text=Join%20me%20on%20this%20dating%20bot!%20Use%20my%20code%20${
+          user.referralCode
+        }%20to%20get%20a%20free%20premium%20match.`
+      ),
+      Markup.button.callback("🔄 Refresh", "show_referral"),
+    ])
+  );
+});
+
+bot.action("show_referral", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.deleteMessage();
+  await ctx.scene.leave();
+  const telegramId = ctx.from.id;
+  const user = await usersCollection.findOne({ telegramId });
+
+  const referralMessage = `🎁 Referral Program 🎁
+
+Your referral code: ${user.referralCode}
+Your credits: ${user.referralCredits || 0}
+People referred: ${user.referralCount || 0}`;
+
+  const referralLink = `https://t.me/${
+    (await bot.telegram.getMe()).username
+  }?start=${user.referralCode}`;
+
+  await ctx.reply(
+    referralMessage,
+    Markup.inlineKeyboard([
+      Markup.button.url(
+        "📤 Share Referral Link",
+        `https://t.me/share/url?url=${encodeURIComponent(
+          referralLink
+        )}&text=Join%20me%20on%20this%20dating%20bot!%20Use%20my%20code%20${
+          user.referralCode
+        }%20to%20get%20a%20free%20premium%20match.`
+      ),
+      Markup.button.callback("🔄 Refresh", "show_referral"),
+    ])
+  );
+});
+
+// ===================== MESSAGE HANDLERS =====================
+bot.action(/message_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const recipientId = parseInt(ctx.match[1]);
+  ctx.session.conversationPartner = recipientId;
+  await ctx.reply(`Type your message to send to ${recipientId}:`);
+});
+
+bot.on("text", async (ctx) => {
+  if (ctx.session.conversationPartner) {
+    await handleMessage(ctx, ctx.session.conversationPartner, ctx.message.text);
+    ctx.session.conversationPartner = null;
+  }
+});
+
+// ===================== FUN QUESTION HANDLER =====================
+bot.action(/fun_question_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const partnerId = parseInt(ctx.match[1]);
+  const questions = [
+    "Would you rather have unlimited sushi for life or unlimited tacos for life?",
+    "Would you rather be able to talk to animals or speak all foreign languages?",
+    "Would you rather have a rewind button or a pause button in your life?",
+    "Would you rather always be 10 minutes late or always be 20 minutes early?",
+    "Would you rather lose all your money or all your pictures?",
   ];
 
-  const random =
-    wouldYouRather[Math.floor(Math.random() * wouldYouRather.length)];
+  const randomQuestion =
+    questions[Math.floor(Math.random() * questions.length)];
+  wyrAnswers[ctx.from.id] = { question: randomQuestion, partnerId };
 
-  // Generate a unique questionKey (timestamp + sender + recipient)
-  const questionKey = `${Date.now()}_${senderId}_${recipientId}`;
-  ctx.session.wyrQuestionKey = questionKey;
-  ctx.session.wyrMood = ctx.session.lastMood || "😊 Friendly";
-
-  // Send to both users with interactive buttons
-  const keyboard = Markup.inlineKeyboard([
-    [
-      Markup.button.callback(random.a[0], `wyr_${questionKey}_0`),
-      Markup.button.callback(random.a[1], `wyr_${questionKey}_1`),
-    ],
-  ]);
-
-  await ctx.reply(`🎲 Would You Rather: ${random.q}`, keyboard);
-  if (recipientId !== senderId) {
-    await ctx.telegram.sendMessage(
-      recipientId,
-      `🎲 Would You Rather: ${random.q}`,
-      keyboard
-    );
-  }
+  await ctx.reply(
+    `🤔 Would You Rather (with ${partnerId}):\n\n${randomQuestion}`,
+    Markup.inlineKeyboard([
+      Markup.button.callback("Option A", "wyr_option_a"),
+      Markup.button.callback("Option B", "wyr_option_b"),
+    ])
+  );
 });
 
-// In your wyr answer handler:
-bot.action(/wyr_(.+)_(\d)/, async (ctx) => {
-  const questionKey = ctx.match[1];
-  const answerIndex = parseInt(ctx.match[2]);
+bot.action("wyr_option_a", async (ctx) => {
+  await handleWyrAnswer(ctx, "A");
+});
+
+bot.action("wyr_option_b", async (ctx) => {
+  await handleWyrAnswer(ctx, "B");
+});
+
+async function handleWyrAnswer(ctx, option) {
   const userId = ctx.from.id;
-  const userName = ctx.from.first_name || "Someone";
-  const mood = ctx.session.wyrMood || "😊 Friendly";
+  const wyrData = wyrAnswers[userId];
 
-  // Store the answer and mood
-  if (!wyrAnswers[questionKey]) wyrAnswers[questionKey] = {};
-  wyrAnswers[questionKey][userId] = { answerIndex, mood };
-
-  // If both users have answered
-  const userIds = Object.keys(wyrAnswers[questionKey]);
-  if (userIds.length === 2) {
-    const [userA, userB] = userIds;
-    const a = wyrAnswers[questionKey][userA];
-    const b = wyrAnswers[questionKey][userB];
-
-    if (a.answerIndex === b.answerIndex) {
-      // Mood-based congrats
-      let congratsMsg = "";
-      if (a.mood === "😏 Flirty" && b.mood === "😏 Flirty") {
-        congratsMsg =
-          "🔥 It's a flirty match! You both chose the same and are in a flirty mood! Maybe it's fate? 😉";
-      } else if (a.mood === "😊 Friendly" && b.mood === "😊 Friendly") {
-        congratsMsg =
-          "🎉 Friendly vibes! You both picked the same and are in a friendly mood. Great minds think alike!";
-      } else if (a.mood === "🧠 Deep Talk" && b.mood === "🧠 Deep Talk") {
-        congratsMsg =
-          "💡 Deep connection! You both chose the same and are in a deep talk mood. Profound!";
-      } else {
-        congratsMsg =
-          "👏 You both picked the same! Looks like you have something in common!";
-      }
-      await ctx.telegram.sendMessage(userA, congratsMsg);
-      await ctx.telegram.sendMessage(userB, congratsMsg);
-    }
-    // Clean up
-    delete wyrAnswers[questionKey];
+  if (!wyrData) {
+    await ctx.answerCbQuery("Question expired. Start a new one!");
+    return;
   }
 
-  await ctx.reply(`${userName} chose option ${answerIndex === 0 ? "1" : "2"}!`);
-  await ctx.answerCbQuery("Answer submitted!");
+  const questionParts = wyrData.question.split(" or ");
+  const answerText = option === "A" ? questionParts[0] : questionParts[1];
+
+  await ctx.reply(`You chose: ${answerText}`);
+
+  // Send answer to partner
+  const user = await usersCollection.findOne({ telegramId: userId });
+  await bot.telegram.sendMessage(
+    wyrData.partnerId,
+    `${user.name} answered your "Would You Rather" question:\n\n${wyrData.question}\n\nThey chose: ${answerText}`
+  );
+
+  delete wyrAnswers[userId];
+}
+
+// ===================== SHARE USERNAME HANDLER =====================
+bot.action(/share_username_(\d+)/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const userId = ctx.from.id;
+  const partnerId = parseInt(ctx.match[1]);
+
+  const user = await usersCollection.findOne({ telegramId: userId });
+  if (!user.username) {
+    await ctx.reply("You don't have a Telegram username set in your profile.");
+    return;
+  }
+
+  await bot.telegram.sendMessage(
+    partnerId,
+    `${user.name} (@${user.username}) has shared their username with you!`
+  );
+
+  await ctx.reply(`Your username @${user.username} has been shared.`);
+});
+
+// ===================== DISTANCE FILTER HANDLER =====================
+bot.action("distance_filter", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply(
+    "Set maximum distance for matches (in km):",
+    Markup.keyboard([
+      ["10 km", "25 km"],
+      ["50 km", "100 km"],
+      ["Any distance"],
+      ["Cancel"],
+    ]).oneTime()
+  );
 });
 
 // ===================== ERROR HANDLING =====================
 bot.catch((err, ctx) => {
-  console.error("Bot error:", err);
-  ctx.reply("An unexpected error occurred. Please try again.");
+  console.error(`Error for ${ctx.updateType} update:`, err);
   if (ADMIN_IDS.length > 0) {
-    bot.telegram
-      .sendMessage(
-        ADMIN_IDS[0],
-        `Bot error: ${err.message}\nUser: ${ctx.from.id}`
-      )
-      .catch(console.error);
+    bot.telegram.sendMessage(
+      ADMIN_IDS[0],
+      `Error in ${ctx.updateType}: ${err.message}\n\nUser: ${ctx.from.id}`
+    );
   }
+  return ctx.reply("An error occurred. Please try again.");
 });
 
-// ===================== START BOT =====================
+// ===================== START THE BOT =====================
 async function startBot() {
-  try {
-    await connectDB();
-    await bot.telegram.setMyShortDescription(
-      `Welcome to Konvo — the easiest way to meet interesting people right here on Telegram.\n🤖 v${version}`
-    );
-    await bot.launch();
-    console.log("Dating bot is running...");
-  } catch (error) {
-    console.error("Failed to start bot:", error);
-    process.exit(1);
-  }
-}
+  await connectDB();
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+  // Start photo reminder broadcast on a schedule
+  setInterval(sendPhotoReminderBroadcast, 24 * 60 * 60 * 1000); // Daily
+
+  await bot.launch();
+  console.log("Bot started successfully");
+
+  // Graceful shutdown
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+}
 
 startBot();
