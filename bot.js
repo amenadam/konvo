@@ -1036,7 +1036,7 @@ async function showAdminStats(ctx) {
 🆕 New Users Today: ${newUsersToday}
 
 male users: ${maleUsers}
-Female users: ${FemaleUsers}
+Female users: ${femaleUsers}
     
 📌 Referral Stats:
 🎁 Users with referrals: ${usersWithReferrals}
