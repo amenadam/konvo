@@ -319,6 +319,38 @@ async function connectDB() {
     process.exit(1);
   }
 }
+async function removeBlockedUsers(bot) {
+  try {
+    const users = await usersCollection
+      .find({}, { projection: { telegramId: 1 } })
+      .toArray();
+    let removedCount = 0;
+
+    for (const user of users) {
+      try {
+        await bot.telegram.sendChatAction(user.telegramId, "typing");
+      } catch (err) {
+        if (err.response && err.response.error_code === 403) {
+          // User blocked the bot or deactivated account
+          await usersCollection.deleteOne({ telegramId: user.telegramId });
+          removedCount++;
+          console.log(`Removed blocked user: ${user.telegramId}`);
+        } else {
+          console.error(
+            `Error checking user ${user.telegramId}:`,
+            err.description || err.message
+          );
+        }
+      }
+    }
+
+    console.log(
+      `Blocked users cleanup completed. Removed ${removedCount} users.`
+    );
+  } catch (err) {
+    console.error("Error in removeBlockedUsers:", err);
+  }
+}
 
 // Simulated reverse geocoding function
 async function reverseGeocode(lat, lon) {
@@ -1013,6 +1045,7 @@ Here's how to update your photo:
 // ===================== ADMIN FUNCTIONS =====================
 async function showAdminStats(ctx) {
   try {
+    await removeBlockedUsers(bot);
     const totalUsers = await usersCollection.countDocuments();
     const activeUsers = await usersCollection.countDocuments({ active: true });
     const maleUsers = await usersCollection.countDocuments({
@@ -1573,6 +1606,9 @@ async function startBot() {
 
   // Start photo reminder broadcast on a schedule
   //setInterval(sendPhotoReminderBroadcast, 24 * 60 * 60 * 1000); // Daily
+  await bot.telegram.setMyDescription(
+    `KONVO Telegram Bot - version ${version}\nFind matches, chat, and have fun!`
+  );
 
   await bot.launch();
   console.log("Bot started successfully");
