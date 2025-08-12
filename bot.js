@@ -13,7 +13,7 @@ let db,
   adminCollection;
 
 // Initialize bot
-const bot = new Telegraf(process.env.TEST_BOT_TOKEN);
+const bot = new Telegraf(process.env.BOT_TOKEN);
 const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(Number)
   : [];
