@@ -729,12 +729,40 @@ async function showMatch(ctx, match) {
           .trim()
           .toLowerCase()
       : null;
-    const userLocation = user.location
-      ? user.location
+    const getUserLocationString = (user) => {
+      if (!user) return null;
+
+      // Case 1: GeoJSON coordinates (precise location)
+      if (
+        user.location &&
+        user.location.type === "Point" &&
+        Array.isArray(user.location.coordinates)
+      ) {
+        return `coordinates:${user.location.coordinates[1]},${user.location.coordinates[0]}`;
+      }
+
+      // Case 2: String location (city name)
+      if (typeof user.location === "string") {
+        return user.location
           .replace(/^(city|location):\s*/i, "")
           .trim()
-          .toLowerCase()
-      : null;
+          .toLowerCase();
+      }
+
+      // Case 3: City field as fallback
+      if (typeof user.city === "string") {
+        return user.city
+          .replace(/^(city|location):\s*/i, "")
+          .trim()
+          .toLowerCase();
+      }
+
+      // No location available
+      return null;
+    };
+
+    // Usage example:
+    const userLocation = getUserLocationString(user);
 
     const matchCity = match.city
       ? match.city
