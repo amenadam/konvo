@@ -779,6 +779,179 @@ async function showMatch(ctx, match) {
   }
 }
 
+async function showProfilesForAdmin(ctx, user, index = 0) {
+  try {
+    // Get all users except admins
+    const allUsers = await usersCollection
+      .find({
+        telegramId: { $nin: ADMIN_IDS },
+      })
+      .toArray();
+
+    if (allUsers.length === 0) {
+      return ctx.reply("No users found in database.");
+    }
+
+    // Handle index out of bounds
+    if (index >= allUsers.length) index = 0;
+    if (index < 0) index = allUsers.length - 1;
+
+    const match = allUsers[index];
+    const currentPosition = `${index + 1}/${allUsers.length}`;
+
+    // Create admin-specific caption
+    let caption = `👤 <b>User Profile</b> (${currentPosition})\n\n`;
+    caption += `🆔 ID: <code>${match.telegramId}</code>\n`;
+    caption += `👤 Name: ${match.name || "Unknown"}\n`;
+    caption += `🎂 Age: ${match.age || "Not specified"}\n`;
+    caption += `⚧️ Gender: ${match.gender || "Not specified"}\n`;
+    caption += `📍 Location: ${
+      match.city || match.location || "Not specified"
+    }\n`;
+    caption += `📝 Bio: ${match.bio || "No bio provided"}\n`;
+    caption += `🔍 Interested in: ${match.interestedIn || "Not specified"}\n`;
+    caption += `🔄 Last active: ${
+      match.lastActive ? new Date(match.lastActive).toLocaleString() : "Unknown"
+    }\n`;
+    caption += `✅ Verified: ${match.verified ? "Yes" : "No"}\n`;
+    caption += `🚦 Status: ${match.active ? "Active" : "Inactive"}`;
+
+    // Prepare photo or use default
+    const photoToSend = match.photo || process.env.DEFAULT_PROFILE_PHOTO;
+
+    // Create admin keyboard with navigation and actions
+    const keyboard = [
+      [
+        Markup.button.callback("⬅️ Previous", `admin_prev_${index}`),
+        Markup.button.callback("➡️ Next", `admin_next_${index}`),
+      ],
+      [
+        Markup.button.callback("✉️ Message", `admin_msg_${match.telegramId}`),
+        Markup.button.callback(
+          match.active ? "❌ Deactivate" : "✅ Activate",
+          `admin_toggle_${match.telegramId}`
+        ),
+      ],
+      [
+        Markup.button.callback("🚫 Ban User", `admin_ban_${match.telegramId}`),
+        Markup.button.callback("🔄 Refresh", `admin_refresh_${index}`),
+      ],
+      [Markup.button.callback("🔙 Back to Menu", "admin_menu")],
+    ];
+
+    // Send or update the message
+    if (ctx.update.callback_query) {
+      await ctx.editMessageMedia(
+        {
+          type: "photo",
+          media: photoToSend,
+          caption: caption,
+          parse_mode: "HTML",
+        },
+        Markup.inlineKeyboard(keyboard)
+      );
+    } else {
+      await ctx.replyWithPhoto(photoToSend, {
+        caption: caption,
+        parse_mode: "HTML",
+        reply_markup: Markup.inlineKeyboard(keyboard),
+      });
+    }
+
+    // Store current index in session for navigation
+    ctx.session.adminCurrentIndex = index;
+    ctx.session.adminUserList = allUsers.map((u) => u.telegramId);
+  } catch (error) {
+    console.error("Error in showProfilesForAdmin:", error);
+    await ctx.reply("Couldn't load user profiles. Please try again.");
+    if (ADMIN_IDS.includes(ctx.from.id)) {
+      await ctx.telegram.sendMessage(
+        ctx.from.id,
+        `Admin error in showProfilesForAdmin: ${error.message}`
+      );
+    }
+  }
+}
+
+async function handleAdminMessageUser(ctx) {
+  try {
+    const userId = ctx.match[1];
+    ctx.session.adminMessageTarget = userId;
+
+    await ctx.reply(
+      `Enter the message you want to send to user ${userId}:`,
+      Markup.keyboard([["Cancel"]]).resize()
+    );
+
+    ctx.session.adminWaitingForMessage = true;
+  } catch (error) {
+    console.error("Error in handleAdminMessageUser:", error);
+    await ctx.reply("Error preparing message. Please try again.");
+  }
+}
+
+// Add these to your bot action handlers
+bot.action(/admin_prev_(\d+)/, async (ctx) => {
+  const index = parseInt(ctx.match[1]) - 1;
+  await showProfilesForAdmin(ctx, ctx.from, index);
+});
+
+bot.action(/admin_next_(\d+)/, async (ctx) => {
+  const index = parseInt(ctx.match[1]) + 1;
+  await showProfilesForAdmin(ctx, ctx.from, index);
+});
+
+bot.action(/admin_msg_(\d+)/, handleAdminMessageUser);
+
+bot.action(/admin_toggle_(\d+)/, async (ctx) => {
+  const userId = parseInt(ctx.match[1]);
+  const user = await usersCollection.findOne({ telegramId: userId });
+  await usersCollection.updateOne(
+    { telegramId: userId },
+    { $set: { active: !user.active } }
+  );
+  await ctx.answerCbQuery(`User ${user.active ? "deactivated" : "activated"}`);
+  await showProfilesForAdmin(ctx, ctx.from, ctx.session.adminCurrentIndex);
+});
+
+bot.action(/admin_ban_(\d+)/, async (ctx) => {
+  const userId = parseInt(ctx.match[1]);
+  await usersCollection.updateOne(
+    { telegramId: userId },
+    { $set: { banned: true, active: false } }
+  );
+  await ctx.answerCbQuery("User banned successfully");
+  await showProfilesForAdmin(ctx, ctx.from, ctx.session.adminCurrentIndex);
+});
+
+bot.action(/admin_refresh_(\d+)/, async (ctx) => {
+  await showProfilesForAdmin(ctx, ctx.from, parseInt(ctx.match[1]));
+});
+
+// Handle the actual message sending
+bot.on("text", async (ctx) => {
+  if (ctx.session.adminWaitingForMessage) {
+    if (ctx.message.text.toLowerCase() === "cancel") {
+      delete ctx.session.adminWaitingForMessage;
+      delete ctx.session.adminMessageTarget;
+      await ctx.reply("Message cancelled", Markup.removeKeyboard());
+      return;
+    }
+
+    try {
+      await ctx.telegram.sendMessage(
+        ctx.session.adminMessageTarget,
+        `📨 Message from admin:\n\n${ctx.message.text}`
+      );
+      await ctx.reply("Message sent successfully!", Markup.removeKeyboard());
+    } catch (error) {
+      await ctx.reply(`Failed to send message: ${error.message}`);
+    }
+
+    delete ctx.session.adminWaitingForMessage;
+    delete ctx.session.adminMessageTarget;
+  }
+});
 // ===================== LIKE/DISLIKE HANDLERS =====================
 bot.action(/like_(\d+)/, async (ctx) => {
   try {
@@ -918,7 +1091,7 @@ async function showMainMenu(ctx) {
         "Admin Menu:",
         Markup.keyboard([
           ["📊 Stats", "📢 Broadcast"],
-          ["🔙 User Menu"],
+          ["🔙 User Menu", "All Users"],
         ]).resize()
       );
     }
@@ -1286,6 +1459,40 @@ bot.hears("🚪 Deactivate Profile", async (ctx) => {
 // Admin menu commands
 bot.hears("🔙 User Menu", async (ctx) => {
   await showMainMenu(ctx);
+});
+
+bot.hears("All Users", async (ctx) => {
+  try {
+    if (!ADMIN_IDS.includes(ctx.from.id)) {
+      await ctx.reply("❌ You are not authorized to use this command.");
+      return;
+    }
+
+    // Send loading message
+    const loadingMsg = await ctx.reply("⏳ Loading user profiles...");
+
+    // Initialize session if it doesn't exist
+    if (!ctx.session.admin) {
+      ctx.session.admin = {};
+    }
+
+    // Start from the first user
+    await showProfilesForAdmin(ctx, ctx.from, 0);
+
+    // Delete loading message
+    await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id);
+  } catch (error) {
+    console.error("Error in All Users command:", error);
+    await ctx.reply("❌ Failed to load user profiles. Please try again.");
+
+    // Notify main admin about the error
+    if (ADMIN_IDS.length > 0) {
+      await bot.telegram.sendMessage(
+        ADMIN_IDS[0],
+        `Error in All Users command by ${ctx.from.id}: ${error.message}`
+      );
+    }
+  }
 });
 
 bot.hears("📊 Stats", async (ctx) => {
