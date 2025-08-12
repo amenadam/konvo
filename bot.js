@@ -479,24 +479,56 @@ async function findMatch(ctx, maxDistance = 50) {
       interestedIn: { $in: [user.gender, "Both"] },
     };
 
-    // Add location filter if available
-    if (user.location) {
-      query.location = {
-        $near: {
-          $geometry: {
-            type: "Point",
-            coordinates: user.location.coordinates,
-          },
-          $maxDistance: maxDistance * 1000,
-        },
-      };
+    // Add location/city filter if available
+    if (user.city || user.location) {
+      const locationConditions = [];
+
+      // If user has city, match against city or location fields
+      if (user.city) {
+        const cleanCity = user.city
+          .replace(/^(city|location):\s*/i, "")
+          .trim()
+          .toLowerCase();
+        const cityRegex = new RegExp(
+          `^(city|location):\\s*${cleanCity}|${cleanCity}$`,
+          "i"
+        );
+
+        locationConditions.push(
+          { city: { $regex: cityRegex } },
+          { location: { $regex: cityRegex } }
+        );
+      }
+
+      // If user has location, match against location or city fields
+      if (user.location) {
+        const cleanLocation = user.location
+          .replace(/^(city|location):\s*/i, "")
+          .trim()
+          .toLowerCase();
+        const locationRegex = new RegExp(
+          `^(city|location):\\s*${cleanLocation}|${cleanLocation}$`,
+          "i"
+        );
+
+        locationConditions.push(
+          { location: { $regex: locationRegex } },
+          { city: { $regex: locationRegex } }
+        );
+      }
+
+      // Combine conditions with OR
+      if (locationConditions.length > 0) {
+        query.$or = locationConditions;
+      }
     }
 
     const potentialMatch = await usersCollection.findOne(query);
 
     if (!potentialMatch) {
-      if (user.location) {
-        delete query.location;
+      // Try again without location filters
+      if (user.city || user.location) {
+        delete query.$or;
         const potentialMatchWithoutLocation = await usersCollection.findOne(
           query
         );
@@ -675,13 +707,47 @@ async function showMatch(ctx, match) {
       );
       distanceInfo = `\nDistance: ~${Math.round(distance)} km`;
     } else if (match.city) {
-      distanceInfo = `\nLocation: ${match.city}`;
+      distanceInfo = `\nLocation: ${match.city} `;
     }
 
     let score = 0;
     if (user.gender === match.interestedIn) score++;
     if (user.interestedIn === match.gender) score++;
-    if (user.city && match.city && user.city === match.city) score++;
+    const userCity = user.city
+      ? user.city
+          .replace(/^(city|location):\s*/i, "")
+          .trim()
+          .toLowerCase()
+      : null;
+    const userLocation = user.location
+      ? user.location
+          .replace(/^(city|location):\s*/i, "")
+          .trim()
+          .toLowerCase()
+      : null;
+
+    const matchCity = match.city
+      ? match.city
+          .replace(/^(city|location):\s*/i, "")
+          .trim()
+          .toLowerCase()
+      : null;
+    const matchLocation = match.location
+      ? match.location
+          .replace(/^(city|location):\s*/i, "")
+          .trim()
+          .toLowerCase()
+      : null;
+
+    // If either city or location matches (case insensitive)
+    if (
+      (userCity && matchCity && userCity === matchCity) ||
+      (userCity && matchLocation && userCity === matchLocation) ||
+      (userLocation && matchCity && userLocation === matchCity) ||
+      (userLocation && matchLocation && userLocation === matchLocation)
+    ) {
+      score++;
+    }
     if (user.age && match.age && Math.abs(user.age - match.age) <= 5) score++;
 
     const caption = `Name: ${match.name || "Unknown"}\nAge: ${
@@ -927,7 +993,7 @@ async function handleMessage(ctx, recipientId, text) {
 
     await bot.telegram.sendMessage(
       recipientId,
-      `New message from ${sender.name} (${username}):\n\n${text}`,
+      `New message from ${sender.name}:\n\n${text}`,
       Markup.inlineKeyboard([
         Markup.button.callback("💌 Reply", `message_${senderId}`),
         Markup.button.callback(
@@ -1185,7 +1251,13 @@ bot.start(async (ctx) => {
 bot.command("version", (ctx) => {
   ctx.reply(`🤖 Bot version: v${version}`);
 });
-
+bot.command("remind", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) {
+    await ctx.reply("You are not authorized to send remind broadcasts.");
+    return;
+  }
+  await sendPhotoReminderBroadcast();
+});
 // User menu commands
 bot.hears("🔍 Find Match", async (ctx) => {
   await findMatch(ctx);
@@ -1298,6 +1370,7 @@ bot.hears("❤️ Who Liked Me", async (ctx) => {
     }
   }
 });
+
 bot.action(/view_profile_(\d+)/, async (ctx) => {
   try {
     await ctx.answerCbQuery();
