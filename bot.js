@@ -703,7 +703,7 @@ async function showMatch(ctx, match) {
     }
 
     let distanceInfo = "";
-    if (user.location && match.location) {
+    if (user.location?.type === "Point" && match.location?.type === "Point") {
       const distance = geodist(
         {
           lat: user.location.coordinates[1],
@@ -717,65 +717,39 @@ async function showMatch(ctx, match) {
       );
       distanceInfo = `\nDistance: ~${Math.round(distance)} km`;
     } else if (match.city) {
-      distanceInfo = `\nLocation: ${match.city} `;
+      distanceInfo = `\nLocation: ${match.city}`;
     }
 
     let score = 0;
     if (user.gender === match.interestedIn) score++;
     if (user.interestedIn === match.gender) score++;
+
+    // Helper function to safely get location string
+    const getLocationString = (location) => {
+      if (!location) return null;
+      if (typeof location === "string") {
+        return location
+          .replace(/^(city|location):\s*/i, "")
+          .trim()
+          .toLowerCase();
+      }
+      return null;
+    };
+
     const userCity = user.city
       ? user.city
           .replace(/^(city|location):\s*/i, "")
           .trim()
           .toLowerCase()
       : null;
-    const getUserLocationString = (user) => {
-      if (!user) return null;
-
-      // Case 1: GeoJSON coordinates (precise location)
-      if (
-        user.location &&
-        user.location.type === "Point" &&
-        Array.isArray(user.location.coordinates)
-      ) {
-        return `coordinates:${user.location.coordinates[1]},${user.location.coordinates[0]}`;
-      }
-
-      // Case 2: String location (city name)
-      if (typeof user.location === "string") {
-        return user.location
-          .replace(/^(city|location):\s*/i, "")
-          .trim()
-          .toLowerCase();
-      }
-
-      // Case 3: City field as fallback
-      if (typeof user.city === "string") {
-        return user.city
-          .replace(/^(city|location):\s*/i, "")
-          .trim()
-          .toLowerCase();
-      }
-
-      // No location available
-      return null;
-    };
-
-    // Usage example:
-    const userLocation = getUserLocationString(user);
-
+    const userLocation = getLocationString(user.location);
     const matchCity = match.city
       ? match.city
           .replace(/^(city|location):\s*/i, "")
           .trim()
           .toLowerCase()
       : null;
-    const matchLocation = match.location
-      ? match.location
-          .replace(/^(city|location):\s*/i, "")
-          .trim()
-          .toLowerCase()
-      : null;
+    const matchLocation = getLocationString(match.location);
 
     // If either city or location matches (case insensitive)
     if (
@@ -816,7 +790,6 @@ async function showMatch(ctx, match) {
     }
   }
 }
-
 async function showProfilesForAdmin(ctx, user, index = 0) {
   try {
     // Get all users except admins
