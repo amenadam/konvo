@@ -13,7 +13,7 @@ let db,
   adminCollection;
 
 // Initialize bot
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf(process.env.TEST_BOT_TOKEN);
 const ADMIN_IDS = process.env.ADMIN_IDS
   ? process.env.ADMIN_IDS.split(",").map(Number)
   : [];
@@ -286,37 +286,47 @@ bot.use(stage.middleware());
 
 // ===================== DATABASE FUNCTIONS =====================
 async function connectDB() {
-  try {
-    await client.connect();
-    db = client.db();
-    usersCollection = db.collection("users");
-    matchesCollection = db.collection("matches");
-    conversationsCollection = db.collection("conversations");
-    adminCollection = db.collection("admin");
+  let attempts = 0;
+  const maxAttempts = 5;
+  const retryDelay = 5000; // 5 seconds
 
-    // Drop existing telegramId index if it exists
+  while (attempts < maxAttempts) {
     try {
-      await usersCollection.dropIndex("telegramId_1");
-      console.log("Dropped existing telegramId index");
-    } catch (dropError) {
-      if (dropError.codeName !== "NamespaceNotFound") {
-        throw dropError;
+      console.log(`Attempting MongoDB connection (attempt ${attempts + 1})`);
+      await client.connect();
+
+      // Verify connection
+      await client.db().command({ ping: 1 });
+      console.log("Successfully connected to MongoDB");
+
+      db = client.db();
+      usersCollection = db.collection("users");
+      matchesCollection = db.collection("matches");
+      conversationsCollection = db.collection("conversations");
+      adminCollection = db.collection("admin");
+
+      // Setup event listeners
+      client.on("serverClosed", (event) => {
+        console.log("MongoDB connection closed:", event);
+        setTimeout(connectDB, retryDelay);
+      });
+
+      client.on("error", (err) => {
+        console.log("MongoDB error:", err);
+      });
+
+      return; // Successfully connected
+    } catch (err) {
+      attempts++;
+      console.log(`MongoDB connection attempt ${attempts} failed:`, err);
+
+      if (attempts >= maxAttempts) {
+        console.log("Max MongoDB connection attempts reached");
+        throw err;
       }
+
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
     }
-
-    // Create indexes
-    await usersCollection.createIndex({ location: "2dsphere" });
-    await usersCollection.createIndex(
-      { referralCode: 1 },
-      { unique: true, sparse: true }
-    );
-    await usersCollection.createIndex({ telegramId: 1 }, { unique: true }); // Add unique here
-    await matchesCollection.createIndex({ telegramId1: 1, telegramId2: 1 });
-
-    console.log("Connected to MongoDB");
-  } catch (err) {
-    console.error("MongoDB connection error:", err);
-    process.exit(1);
   }
 }
 async function removeBlockedUsers(bot) {
@@ -816,9 +826,6 @@ async function showProfilesForAdmin(ctx, user, index = 0) {
     caption += `✅ Verified: ${match.verified ? "Yes" : "No"}\n`;
     caption += `🚦 Status: ${match.active ? "Active" : "Inactive"}`;
 
-    // Prepare photo or use default
-    const photoToSend = match.photo || process.env.DEFAULT_PROFILE_PHOTO;
-
     // Create admin keyboard with navigation and actions
     const keyboard = [
       [
@@ -839,23 +846,54 @@ async function showProfilesForAdmin(ctx, user, index = 0) {
       [Markup.button.callback("🔙 Back to Menu", "admin_menu")],
     ];
 
-    // Send or update the message
-    if (ctx.update.callback_query) {
-      await ctx.editMessageMedia(
-        {
-          type: "photo",
-          media: photoToSend,
-          caption: caption,
+    // Check if user has a custom photo or is using default
+    const hasCustomPhoto =
+      match.photo && match.photo !== process.env.DEFAULT_PROFILE_PHOTO;
+    const isFileId =
+      match.photo && /^[A-Za-z0-9_-]+$/.test(match.photo.split(":")[0]);
+
+    if (!hasCustomPhoto) {
+      // No custom photo - just send text with "NO PROFILE PHOTO"
+      caption = `🚫 NO PROFILE PHOTO\n\n${caption}`;
+      if (ctx.update.callback_query) {
+        await ctx.editMessageText(caption, {
           parse_mode: "HTML",
-        },
-        Markup.inlineKeyboard(keyboard)
-      );
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      } else {
+        await ctx.reply(caption, {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      }
+    } else if (isFileId) {
+      // Has a custom photo (Telegram file ID) - indicate photo exists but don't send it
+      caption = `✅ PROFILE PHOTO UPLOADED\n\n${caption}`;
+      if (ctx.update.callback_query) {
+        await ctx.editMessageText(caption, {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      } else {
+        await ctx.reply(caption, {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      }
     } else {
-      await ctx.replyWithPhoto(photoToSend, {
-        caption: caption,
-        parse_mode: "HTML",
-        reply_markup: Markup.inlineKeyboard(keyboard),
-      });
+      // Has a custom photo (URL) - you can choose to handle this differently if needed
+      caption = `🌐 PROFILE PHOTO (URL)\n\n${caption}`;
+      if (ctx.update.callback_query) {
+        await ctx.editMessageText(caption, {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      } else {
+        await ctx.reply(caption, {
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: keyboard },
+        });
+      }
     }
 
     // Store current index in session for navigation
@@ -891,180 +929,6 @@ async function handleAdminMessageUser(ctx) {
 }
 
 // Add these to your bot action handlers
-bot.action(/admin_prev_(\d+)/, async (ctx) => {
-  const index = parseInt(ctx.match[1]) - 1;
-  await showProfilesForAdmin(ctx, ctx.from, index);
-});
-
-bot.action(/admin_next_(\d+)/, async (ctx) => {
-  const index = parseInt(ctx.match[1]) + 1;
-  await showProfilesForAdmin(ctx, ctx.from, index);
-});
-
-bot.action(/admin_msg_(\d+)/, handleAdminMessageUser);
-
-bot.action(/admin_toggle_(\d+)/, async (ctx) => {
-  const userId = parseInt(ctx.match[1]);
-  const user = await usersCollection.findOne({ telegramId: userId });
-  await usersCollection.updateOne(
-    { telegramId: userId },
-    { $set: { active: !user.active } }
-  );
-  await ctx.answerCbQuery(`User ${user.active ? "deactivated" : "activated"}`);
-  await showProfilesForAdmin(ctx, ctx.from, ctx.session.adminCurrentIndex);
-});
-
-bot.action(/admin_ban_(\d+)/, async (ctx) => {
-  const userId = parseInt(ctx.match[1]);
-  await usersCollection.updateOne(
-    { telegramId: userId },
-    { $set: { banned: true, active: false } }
-  );
-  await ctx.answerCbQuery("User banned successfully");
-  await showProfilesForAdmin(ctx, ctx.from, ctx.session.adminCurrentIndex);
-});
-
-bot.action(/admin_refresh_(\d+)/, async (ctx) => {
-  await showProfilesForAdmin(ctx, ctx.from, parseInt(ctx.match[1]));
-});
-
-// Handle the actual message sending
-bot.on("text", async (ctx) => {
-  if (ctx.session.adminWaitingForMessage) {
-    if (ctx.message.text.toLowerCase() === "cancel") {
-      delete ctx.session.adminWaitingForMessage;
-      delete ctx.session.adminMessageTarget;
-      await ctx.reply("Message cancelled", Markup.removeKeyboard());
-      return;
-    }
-
-    try {
-      await ctx.telegram.sendMessage(
-        ctx.session.adminMessageTarget,
-        `📨 Message from admin:\n\n${ctx.message.text}`
-      );
-      await ctx.reply("Message sent successfully!", Markup.removeKeyboard());
-    } catch (error) {
-      await ctx.reply(`Failed to send message: ${error.message}`);
-    }
-
-    delete ctx.session.adminWaitingForMessage;
-    delete ctx.session.adminMessageTarget;
-  }
-});
-// ===================== LIKE/DISLIKE HANDLERS =====================
-bot.action(/like_(\d+)/, async (ctx) => {
-  try {
-    await ctx.answerCbQuery();
-    const likerId = ctx.from.id;
-    const likedId = parseInt(ctx.match[1]);
-
-    // Check for existing match
-    const existingMatch = await matchesCollection.findOne({
-      $or: [
-        { telegramId1: likedId, telegramId2: likerId },
-        { telegramId1: likerId, telegramId2: likedId },
-      ],
-    });
-
-    if (existingMatch) {
-      if (
-        existingMatch.telegramId1 === likedId &&
-        existingMatch.status === "pending"
-      ) {
-        // It's a match!
-        await matchesCollection.updateOne(
-          { _id: existingMatch._id },
-          { $set: { status: "matched", matchedAt: new Date() } }
-        );
-
-        const liker = await usersCollection.findOne({ telegramId: likerId });
-        const liked = await usersCollection.findOne({ telegramId: likedId });
-
-        await ctx.reply(
-          `It's a match! You and ${liked.name} have liked each other.`
-        );
-        await ctx.telegram.sendMessage(
-          likedId,
-          `It's a match! You and ${liker.name} have liked each other.`,
-          Markup.inlineKeyboard([
-            Markup.button.callback("💬 Message", `message_${likerId}`),
-          ])
-        );
-      }
-    } else {
-      // Create a new pending match
-      await matchesCollection.insertOne({
-        telegramId1: likerId,
-        telegramId2: likedId,
-        status: "pending",
-        createdAt: new Date(),
-      });
-
-      // Send notification to the liked user
-      await sendLikeNotification(likerId, likedId);
-      await ctx.reply("Like sent! If they like you back, you'll be notified.");
-    }
-
-    await ctx.deleteMessage();
-    await findMatch(ctx);
-  } catch (error) {
-    console.error("Error in like handler:", error);
-    await ctx.answerCbQuery("Failed to process like. Please try again.");
-    if (ADMIN_IDS.length > 0) {
-      await bot.telegram.sendMessage(
-        ADMIN_IDS[0],
-        `Error in like handler for ${ctx.from.id}: ${error.message}`
-      );
-    }
-  }
-});
-
-bot.action(/dislike_(\d+)/, async (ctx) => {
-  try {
-    await ctx.answerCbQuery();
-    const dislikerId = ctx.from.id;
-    const dislikedId = parseInt(ctx.match[1]);
-
-    // Check if this dislike already exists
-    const existingDislike = await matchesCollection.findOne({
-      $or: [
-        {
-          telegramId1: dislikerId,
-          telegramId2: dislikedId,
-          status: "disliked",
-        },
-        {
-          telegramId1: dislikedId,
-          telegramId2: dislikerId,
-          status: "disliked",
-        },
-      ],
-    });
-
-    if (!existingDislike) {
-      // Record the dislike
-      await matchesCollection.insertOne({
-        telegramId1: dislikerId,
-        telegramId2: dislikedId,
-        status: "disliked",
-        createdAt: new Date(),
-      });
-    }
-
-    await ctx.deleteMessage();
-    await findMatch(ctx);
-  } catch (error) {
-    console.error("Error in dislike handler:", error);
-    await ctx.answerCbQuery("Failed to process dislike. Please try again.");
-    if (ADMIN_IDS.length > 0) {
-      await bot.telegram.sendMessage(
-        ADMIN_IDS[0],
-        `Error in dislike handler for ${ctx.from.id}: ${error.message}`
-      );
-    }
-  }
-});
 
 // ===================== MAIN MENU AND PROFILE FUNCTIONS =====================
 async function showMainMenu(ctx) {
@@ -1883,7 +1747,181 @@ bot.action("distance_filter", async (ctx) => {
     ]).oneTime()
   );
 });
+bot.action(/admin_prev_(\d+)/, async (ctx) => {
+  const index = parseInt(ctx.match[1]) - 1;
+  await showProfilesForAdmin(ctx, ctx.from, index);
+});
 
+bot.action(/admin_next_(\d+)/, async (ctx) => {
+  const index = parseInt(ctx.match[1]) + 1;
+  await showProfilesForAdmin(ctx, ctx.from, index);
+});
+
+bot.action(/admin_msg_(\d+)/, handleAdminMessageUser);
+
+bot.action(/admin_toggle_(\d+)/, async (ctx) => {
+  const userId = parseInt(ctx.match[1]);
+  const user = await usersCollection.findOne({ telegramId: userId });
+  await usersCollection.updateOne(
+    { telegramId: userId },
+    { $set: { active: !user.active } }
+  );
+  await ctx.answerCbQuery(`User ${user.active ? "deactivated" : "activated"}`);
+  await showProfilesForAdmin(ctx, ctx.from, ctx.session.adminCurrentIndex);
+});
+
+bot.action(/admin_ban_(\d+)/, async (ctx) => {
+  const userId = parseInt(ctx.match[1]);
+  await usersCollection.updateOne(
+    { telegramId: userId },
+    { $set: { banned: true, active: false } }
+  );
+  await ctx.answerCbQuery("User banned successfully");
+  await showProfilesForAdmin(ctx, ctx.from, ctx.session.adminCurrentIndex);
+});
+
+bot.action(/admin_refresh_(\d+)/, async (ctx) => {
+  await showProfilesForAdmin(ctx, ctx.from, parseInt(ctx.match[1]));
+});
+
+// Handle the actual message sending
+bot.on("text", async (ctx) => {
+  if (ctx.session.adminWaitingForMessage) {
+    if (ctx.message.text.toLowerCase() === "cancel") {
+      delete ctx.session.adminWaitingForMessage;
+      delete ctx.session.adminMessageTarget;
+      await ctx.reply("Message cancelled", Markup.removeKeyboard());
+      return;
+    }
+
+    try {
+      await ctx.telegram.sendMessage(
+        ctx.session.adminMessageTarget,
+        `📨 Message from admin:\n\n${ctx.message.text}`
+      );
+      await ctx.reply("Message sent successfully!", Markup.removeKeyboard());
+    } catch (error) {
+      await ctx.reply(`Failed to send message: ${error.message}`);
+    }
+
+    delete ctx.session.adminWaitingForMessage;
+    delete ctx.session.adminMessageTarget;
+  }
+});
+// ===================== LIKE/DISLIKE HANDLERS =====================
+bot.action(/like_(\d+)/, async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    const likerId = ctx.from.id;
+    const likedId = parseInt(ctx.match[1]);
+
+    // Check for existing match
+    const existingMatch = await matchesCollection.findOne({
+      $or: [
+        { telegramId1: likedId, telegramId2: likerId },
+        { telegramId1: likerId, telegramId2: likedId },
+      ],
+    });
+
+    if (existingMatch) {
+      if (
+        existingMatch.telegramId1 === likedId &&
+        existingMatch.status === "pending"
+      ) {
+        // It's a match!
+        await matchesCollection.updateOne(
+          { _id: existingMatch._id },
+          { $set: { status: "matched", matchedAt: new Date() } }
+        );
+
+        const liker = await usersCollection.findOne({ telegramId: likerId });
+        const liked = await usersCollection.findOne({ telegramId: likedId });
+
+        await ctx.reply(
+          `It's a match! You and ${liked.name} have liked each other.`
+        );
+        await ctx.telegram.sendMessage(
+          likedId,
+          `It's a match! You and ${liker.name} have liked each other.`,
+          Markup.inlineKeyboard([
+            Markup.button.callback("💬 Message", `message_${likerId}`),
+          ])
+        );
+      }
+    } else {
+      // Create a new pending match
+      await matchesCollection.insertOne({
+        telegramId1: likerId,
+        telegramId2: likedId,
+        status: "pending",
+        createdAt: new Date(),
+      });
+
+      // Send notification to the liked user
+      await sendLikeNotification(likerId, likedId);
+      // await ctx.answerCbQuery("Liked");
+      await ctx.reply("Like sent! If they like you back, you'll be notified.");
+    }
+
+    await ctx.deleteMessage();
+    await findMatch(ctx);
+  } catch (error) {
+    console.error("Error in like handler:", error);
+    await ctx.answerCbQuery("Failed to process like. Please try again.");
+    if (ADMIN_IDS.length > 0) {
+      await bot.telegram.sendMessage(
+        ADMIN_IDS[0],
+        `Error in like handler for ${ctx.from.id}: ${error.message}`
+      );
+    }
+  }
+});
+
+bot.action(/dislike_(\d+)/, async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    const dislikerId = ctx.from.id;
+    const dislikedId = parseInt(ctx.match[1]);
+
+    // Check if this dislike already exists
+    const existingDislike = await matchesCollection.findOne({
+      $or: [
+        {
+          telegramId1: dislikerId,
+          telegramId2: dislikedId,
+          status: "disliked",
+        },
+        {
+          telegramId1: dislikedId,
+          telegramId2: dislikerId,
+          status: "disliked",
+        },
+      ],
+    });
+
+    if (!existingDislike) {
+      // Record the dislike
+      await matchesCollection.insertOne({
+        telegramId1: dislikerId,
+        telegramId2: dislikedId,
+        status: "disliked",
+        createdAt: new Date(),
+      });
+    }
+
+    await ctx.deleteMessage();
+    await findMatch(ctx);
+  } catch (error) {
+    console.error("Error in dislike handler:", error);
+    await ctx.answerCbQuery("Failed to process dislike. Please try again.");
+    if (ADMIN_IDS.length > 0) {
+      await bot.telegram.sendMessage(
+        ADMIN_IDS[0],
+        `Error in dislike handler for ${ctx.from.id}: ${error.message}`
+      );
+    }
+  }
+});
 // ===================== ERROR HANDLING =====================
 bot.catch((err, ctx) => {
   console.error(`Error for ${ctx.updateType} update:`, err);
@@ -1898,20 +1936,63 @@ bot.catch((err, ctx) => {
 
 // ===================== START THE BOT =====================
 async function startBot() {
-  await connectDB();
+  try {
+    console.log("Connecting to MongoDB...");
+    await connectDB();
+    await bot.launch();
 
-  // Start photo reminder broadcast on a schedule
-  //setInterval(sendPhotoReminderBroadcast, 24 * 60 * 60 * 1000); // Daily
-  await bot.telegram.setMyDescription(
-    `KONVO Telegram Bot - version ${version}\nFind matches, chat, and have fun!`
-  );
+    console.log("Setting bot commands...");
+    await bot.telegram.setMyCommands([
+      { command: "start", description: "Start the bot" },
+      { command: "help", description: "Show help" },
+      { command: "version", description: "Show bot version" },
+    ]);
 
-  await bot.launch();
-  console.log("Bot started successfully");
+    console.log("Starting bot...");
+    await bot.launch();
+    console.log("Bot started successfully");
+    await bot.launch();
 
-  // Graceful shutdown
-  process.once("SIGINT", () => bot.stop("SIGINT"));
-  process.once("SIGTERM", () => bot.stop("SIGTERM"));
+    // Ping the bot to verify it's running
+    try {
+      const me = await bot.telegram.getMe();
+      console.log(`Bot @${me.username} is running`);
+    } catch (pingError) {
+      console.error("Bot failed to respond to getMe:", pingError);
+    }
+
+    // Graceful shutdown
+    process.once("SIGINT", () => {
+      console.log("SIGINT received, shutting down gracefully...");
+      bot.stop("SIGINT");
+      process.exit(0);
+    });
+
+    process.once("SIGTERM", () => {
+      console.log("SIGTERM received, shutting down gracefully...");
+      bot.stop("SIGTERM");
+      process.exit(0);
+    });
+
+    // Add keep-alive monitoring
+    setInterval(async () => {
+      try {
+        await bot.telegram.getMe();
+      } catch (err) {
+        console.error("Keep-alive check failed:", err);
+        // Attempt to restart
+        try {
+          await bot.launch();
+          console.log("Bot restarted after keep-alive failure");
+        } catch (restartError) {
+          console.error("Failed to restart bot:", restartError);
+        }
+      }
+    }, 300000); // 5 minutes
+  } catch (error) {
+    console.error("Failed to start bot:", error);
+    process.exit(1);
+  }
 }
 
 startBot();
