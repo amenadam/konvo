@@ -1990,7 +1990,7 @@ async function startBot() {
       }
     }, 300000); // 5 minutes
   } catch (error) {
-    console.error("Failed to start bot:", error);
+    console.error("Failed to start bot: ", error);
     process.exit(1);
   }
 }
