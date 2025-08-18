@@ -69,8 +69,12 @@ const profileWizard = new Scenes.WizardScene(
     return ctx.wizard.next();
   },
   async (ctx) => {
-    if (!ctx.message.photo) {
+    if (!ctx.message || (!ctx.message.photo && !ctx.message.text)) {
       await ctx.reply("Please upload a photo");
+      return;
+    }
+    if (ctx.message.text && ctx.message.text !== "photo") {
+      await ctx.reply("Please upload a photo, not text");
       return;
     }
 
@@ -174,11 +178,25 @@ const editProfileWizard = new Scenes.WizardScene(
     let update = {};
 
     if (field === "Photo") {
-      if (!ctx.message.photo) {
+      if (!ctx.message || (!ctx.message.photo && !ctx.message.text)) {
         await ctx.reply("Please upload a photo");
         return;
       }
-      update.photo = ctx.message.photo[0].file_id;
+
+      if (ctx.message.text && ctx.message.text !== "photo") {
+        await ctx.reply("Please upload a photo, not text");
+        return;
+      }
+
+      const update = { photo: ctx.message.photo[0].file_id };
+      await usersCollection.updateOne(
+        { telegramId: ctx.from.id },
+        { $set: update }
+      );
+
+      await ctx.reply("Photo updated successfully!", Markup.removeKeyboard());
+      await showMainMenu(ctx);
+      return ctx.scene.leave();
     } else if (field === "Age") {
       const age = parseInt(ctx.message.text);
       if (isNaN(age) || age < 18 || age > 120) {
@@ -274,6 +292,9 @@ const broadcastWizard = new Scenes.WizardScene(
     return ctx.scene.leave();
   }
 );
+
+const fix = require("./fix");
+fix(bot, usersCollection, showMainMenu);
 
 // Set up stage with scenes
 const stage = new Scenes.Stage([
