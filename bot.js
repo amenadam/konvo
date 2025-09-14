@@ -2125,6 +2125,7 @@ bot.catch((err, ctx) => {
 
 
 function startBroadcast(usersCollection) {
+ 
   const dailyMessages = [
   "📢 Day 1: Hey Konvo fam 💌! Start your journey with love and positivity today ✨.",
   "📢 Day 2: Remember, communication is key 🔑. Send a sweet text today ❤️.",
@@ -2163,7 +2164,7 @@ function startBroadcast(usersCollection) {
 
   async function sendDailyMessage() {
     if (currentDay >= dailyMessages.length) return; // stop after 30 days
-
+ console.log('sending daily message')
     const message = dailyMessages[currentDay];
     try {
       const users = await usersCollection.find({}).toArray();
@@ -2180,6 +2181,7 @@ function startBroadcast(usersCollection) {
   }
 
   // Send immediately when bot starts
+   console.log('sending...')
   sendDailyMessage();
 
   // Schedule every 24 hours (86,400,000 ms)
