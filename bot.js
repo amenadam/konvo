@@ -409,7 +409,7 @@ async function sendLikeNotification(likerId, likedId) {
     const username = liker.username ? `@${liker.username}` : liker.name;
     const message = `💖 ${
       liker.first_name || liker.name
-    } (${username}) liked your profile!`;
+    }  liked your profile!`;
 
     const keyboard = Markup.inlineKeyboard([
       Markup.button.callback("👀 View Profile", `view_profile_${likerId}`),
@@ -978,6 +978,9 @@ async function showMainMenu(ctx) {
         Markup.keyboard([
           ["📊 Stats", "📢 Broadcast"],
           ["🔙 User Menu", "All Users"],
+          ["🔍 Find Match", "💌 My Matches"],
+        ["👤 My Profile", "✏️ Edit Profile"],
+        ["❤️ Who Liked Me", "🎁 Referral Program"],
         ]).resize()
       );
     }
@@ -1059,10 +1062,10 @@ async function handleMessage(ctx, recipientId, text) {
           "🔗 Share My Username",
           `share_username_${senderId}`
         ),
-        //Markup.button.callback(
-        //"🎲 Would You Rather",
-        //`fun_question_${senderId}`
-        //),
+        Markup.button.callback(
+        "🎲 Would You Rather",
+        `fun_question_${senderId}`
+        ),
       ])
     );
 
@@ -1676,29 +1679,192 @@ bot.on("text", async (ctx) => {
 });
 
 // ===================== FUN QUESTION HANDLER =====================
+
+
+const wyrQuestions = [
+  {
+    question: "Would you rather go on a cozy movie night 🍿 or a fancy dinner date 🍷?",
+    options: ["Movie Night", "Fancy Dinner"],
+  },
+  {
+    question: "Would you rather receive a surprise gift 🎁 or a surprise kiss 💋?",
+    options: ["Gift", "Kiss"],
+  },
+  {
+    question: "Would you rather travel the world together 🌍 or build a dream home 🏡?",
+    options: ["Travel", "Dream Home"],
+  },
+  {
+    question: "Would you rather cuddle all night 🛌 or go on a late-night adventure 🌙?",
+    options: ["Cuddle", "Adventure"],
+  },
+  {
+    question: "Would you rather share your favorite playlist 🎶 or cook your favorite meal 🍲 for each other?",
+    options: ["Playlist", "Meal"],
+  },
+  {
+    question: "Would you rather spend a rainy day ☔ reading together or dancing in the rain 💃?",
+    options: ["Reading", "Dancing"],
+  },
+  {
+    question: "Would you rather kiss under the stars ✨ or in the rain 🌧️?",
+    options: ["Stars", "Rain"],
+  },
+  {
+    question: "Would you rather plan a surprise date 🎭 or be surprised by your partner 🎉?",
+    options: ["Plan", "Be Surprised"],
+  },
+  {
+    question: "Would you rather hold hands while walking 🚶‍♂️ or hug every few minutes 🤗?",
+    options: ["Hold Hands", "Hug Often"],
+  },
+  {
+    question: "Would you rather spend a weekend in the mountains 🏔️ or on the beach 🏖️?",
+    options: ["Mountains", "Beach"],
+  },
+  {
+    question: "Would you rather dance slowly to a romantic song 🎶 or sing karaoke loudly together 🎤?",
+    options: ["Slow Dance", "Karaoke"],
+  },
+  {
+    question: "Would you rather share one dessert 🍰 or order two different ones 🍨?",
+    options: ["Share One", "Two Desserts"],
+  },
+  {
+    question: "Would you rather send long love texts 💌 or have late-night phone calls 📞?",
+    options: ["Love Texts", "Phone Calls"],
+  },
+  {
+    question: "Would you rather have a matching couple outfit 👕 or matching couple tattoos 💉?",
+    options: ["Outfit", "Tattoos"],
+  },
+  {
+    question: "Would you rather be each other’s first love ❤️ or last love 💍?",
+    options: ["First Love", "Last Love"],
+  },
+  {
+    question: "Would you rather play video games together 🎮 or binge-watch a series 📺?",
+    options: ["Video Games", "Series"],
+  },
+  {
+    question: "Would you rather kiss good morning 🌅 or kiss good night 🌙?",
+    options: ["Morning Kiss", "Night Kiss"],
+  },
+  {
+    question: "Would you rather laugh until your stomach hurts 😂 or talk until sunrise 🌄?",
+    options: ["Laugh", "Talk"],
+  },
+  {
+    question: "Would you rather write each other love letters ✍️ or make silly voice notes 🎙️?",
+    options: ["Love Letters", "Voice Notes"],
+  },
+  {
+    question: "Would you rather cook dinner together 🍝 or order takeout and relax 🍕?",
+    options: ["Cook Together", "Order Takeout"],
+  },
+];
+
+
+//compatibility scores
+let compatibilityScores = {}; // cumulative scores per couple
+
+function getCoupleKey(user1, user2) {
+  return [user1, user2].sort().join("_"); // ensures same key regardless of order
+}
+
+// Start a fun question
 bot.action(/fun_question_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
   const partnerId = parseInt(ctx.match[1]);
-  const questions = [
-    "Would you rather have unlimited sushi for life or unlimited tacos for life?",
-    "Would you rather be able to talk to animals or speak all foreign languages?",
-    "Would you rather have a rewind button or a pause button in your life?",
-    "Would you rather always be 10 minutes late or always be 20 minutes early?",
-    "Would you rather lose all your money or all your pictures?",
-  ];
 
-  const randomQuestion =
-    questions[Math.floor(Math.random() * questions.length)];
-  wyrAnswers[ctx.from.id] = { question: randomQuestion, partnerId };
+  const randomQ = wyrQuestions[Math.floor(Math.random() * wyrQuestions.length)];
+  wyrAnswers[ctx.from.id] = { question: randomQ, partnerId };
 
   await ctx.reply(
-    `🤔 Would You Rather :\n\n${randomQuestion}`,
+    `💞 Would You Rather:\n\n${randomQ.question}`,
     Markup.inlineKeyboard([
-      Markup.button.callback("Option A", "wyr_option_a"),
-      Markup.button.callback("Option B", "wyr_option_b"),
+      Markup.button.callback(`👉 ${randomQ.options[0]}`, "wyr_option_a"),
+      Markup.button.callback(`👉 ${randomQ.options[1]}`, "wyr_option_b"),
     ])
   );
 });
+
+// Handle answers
+bot.action(["wyr_option_a", "wyr_option_b"], async (ctx) => {
+  const userId = ctx.from.id;
+  const answer = ctx.callbackQuery.data === "wyr_option_a" ? "A" : "B";
+  const userData = wyrAnswers[userId];
+
+  if (!userData) return ctx.answerCbQuery("No question found 😅");
+
+  // Save the answer
+  userData.answer = answer;
+  await ctx.answerCbQuery("Answer saved ✅");
+
+  // Check if partner answered too
+  const partnerData = wyrAnswers[userData.partnerId];
+  if (
+    partnerData &&
+    partnerData.question.question === userData.question.question &&
+    partnerData.answer
+  ) {
+    const coupleKey = getCoupleKey(userId, userData.partnerId);
+
+    // Check if answers match
+    const match =
+      partnerData.answer === userData.answer
+        ? "💘 You both matched!"
+        : "😅 Different choices this time.";
+
+    // Update compatibility score
+    if (!compatibilityScores[coupleKey]) compatibilityScores[coupleKey] = 0;
+    if (partnerData.answer === userData.answer) {
+      compatibilityScores[coupleKey] += 1;
+    }
+
+    const score = compatibilityScores[coupleKey];
+
+    await ctx.reply(
+      `✨ Results for: *${userData.question.question}*\n\n` +
+        `You chose: *${
+          userData.answer === "A"
+            ? userData.question.options[0]
+            : userData.question.options[1]
+        }*\n` +
+        `Your partner chose: *${
+          partnerData.answer === "A"
+            ? partnerData.question.options[0]
+            : partnerData.question.options[1]
+        }*\n\n` +
+        `${match}\n\n💞 Compatibility Score: *${score}*`,
+      { parse_mode: "Markdown" }
+    );
+
+    delete wyrAnswers[userId];
+    delete wyrAnswers[userData.partnerId];
+  }
+});
+
+// Command to check compatibility score
+bot.command("compatibility", async (ctx) => {
+  const userId = ctx.from.id;
+
+  // Try to find couple score
+  const coupleKey = Object.keys(compatibilityScores).find((key) =>
+    key.includes(userId.toString())
+  );
+
+  if (!coupleKey) {
+    return ctx.reply("💔 You don’t have a recorded compatibility score yet. Play more Would You Rather!");
+  }
+
+  const score = compatibilityScores[coupleKey];
+  await ctx.reply(
+    `💞 Your current compatibility score with your partner is: *${score}*`,
+    { parse_mode: "Markdown" }
+  );
+});
+
 
 bot.action("wyr_option_a", async (ctx) => {
   await handleWyrAnswer(ctx, "A");
@@ -1973,7 +2139,7 @@ async function startBot() {
     console.log("Starting bot...");
     await bot.launch();
     console.log("Bot started successfully");
-    await bot.launch();
+    
 
     // Ping the bot to verify it's running
     try {
