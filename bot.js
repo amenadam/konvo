@@ -2127,9 +2127,15 @@ bot.catch((err, ctx) => {
 async function startBot() {
   try {
     console.log("Connecting to MongoDB...");
-    await connectDB();
+    const client = await connectDB(); // ⬅️ return MongoClient instance
+    const db = client.db("konvo"); // change if your DB name is different
+    const usersDataCollection = db.collection("users");
+
+    console.log("Starting bot...");
     await bot.launch();
-    startBroadcast(bot, usersCollection);
+
+    // Start 30-day auto broadcast
+    startBroadcast(bot, usersDataCollection);
 
     console.log("Setting bot commands...");
     await bot.telegram.setMyCommands([
@@ -2138,18 +2144,12 @@ async function startBot() {
       { command: "version", description: "Show bot version" },
     ]);
 
-    console.log("Starting bot...");
-    await bot.launch();
-    console.log("Bot started successfully");
-    
-    
-
     // Ping the bot to verify it's running
     try {
       const me = await bot.telegram.getMe();
-      console.log(`Bot @${me.username} is running`);
+      console.log(`✅ Bot @${me.username} is running`);
     } catch (pingError) {
-      console.error("Bot failed to respond to getMe:", pingError);
+      console.error("❌ Bot failed to respond to getMe:", pingError);
     }
 
     // Graceful shutdown
@@ -2165,13 +2165,12 @@ async function startBot() {
       process.exit(0);
     });
 
-    // Add keep-alive monitoring
+    // Keep-alive check every 5 minutes
     setInterval(async () => {
       try {
         await bot.telegram.getMe();
       } catch (err) {
         console.error("Keep-alive check failed:", err);
-        // Attempt to restart
         try {
           await bot.launch();
           console.log("Bot restarted after keep-alive failure");
@@ -2181,9 +2180,10 @@ async function startBot() {
       }
     }, 300000); // 5 minutes
   } catch (error) {
-    console.error("Failed to start bot: ", error);
+    console.error("❌ Failed to start bot: ", error);
     process.exit(1);
   }
 }
 
 startBot();
+
