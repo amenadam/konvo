@@ -3,6 +3,7 @@ const { Telegraf, Markup, Scenes, session } = require("telegraf");
 const { MongoClient } = require("mongodb");
 const geodist = require("geodist");
 const { version } = require("./package.json");
+const startBroadcast = require("./broadcast");
 
 // Database connection
 const client = new MongoClient(process.env.MONGODB_URI);
@@ -2139,6 +2140,7 @@ async function startBot() {
     console.log("Starting bot...");
     await bot.launch();
     console.log("Bot started successfully");
+    startBroadcast(bot, usersCollection);
     
 
     // Ping the bot to verify it's running
