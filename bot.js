@@ -2124,7 +2124,7 @@ bot.catch((err, ctx) => {
 });
 
 
-function startBroadcast(usersCollection) {
+function startBroadcast(bot, usersCollection) {
  
   const dailyMessages = [
   "📢 Day 1: Hey Konvo fam 💌! Start your journey with love and positivity today ✨.",
@@ -2200,7 +2200,7 @@ async function startBot() {
     await bot.launch();
 
     // Use global usersCollection
-    startBroadcast(usersCollection);
+    startBroadcast(bot,usersCollection);
 
     console.log("Setting bot commands...");
     await bot.telegram.setMyCommands([
