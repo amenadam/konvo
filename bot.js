@@ -2129,6 +2129,7 @@ async function startBot() {
     console.log("Connecting to MongoDB...");
     await connectDB();
     await bot.launch();
+    startBroadcast(bot, usersCollection);
 
     console.log("Setting bot commands...");
     await bot.telegram.setMyCommands([
@@ -2140,7 +2141,7 @@ async function startBot() {
     console.log("Starting bot...");
     await bot.launch();
     console.log("Bot started successfully");
-    startBroadcast(bot, usersCollection);
+    
     
 
     // Ping the bot to verify it's running
