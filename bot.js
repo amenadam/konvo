@@ -2127,15 +2127,13 @@ bot.catch((err, ctx) => {
 async function startBot() {
   try {
     console.log("Connecting to MongoDB...");
-    const client = await connectDB(); // ⬅️ return MongoClient instance
-    const db = client.db("konvo"); // change if your DB name is different
-    const usersDataCollection = db.collection("users");
+    await connectDB(); // this sets usersCollection globally
 
     console.log("Starting bot...");
     await bot.launch();
 
-    // Start 30-day auto broadcast
-    startBroadcast(bot, usersDataCollection);
+    // Use global usersCollection
+    startBroadcast(bot, usersCollection);
 
     console.log("Setting bot commands...");
     await bot.telegram.setMyCommands([
