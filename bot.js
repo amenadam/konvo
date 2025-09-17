@@ -1979,7 +1979,13 @@ bot.action("refresh_feedback_stats", async (ctx) => {
 
 bot.action("start-feedback", async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.scene.enter("feedback-wizard");
+  await sendBroadcast(
+    ctx,
+    ctx.wizard.state.message,
+    Markup.inlineKeyboard(["Rate us", "give_feedback_now"]),
+    ctx.wizard.state.photo,
+    ctx.wizard.state.caption
+  );
 });
 
 // Handle feedback prompt actions
