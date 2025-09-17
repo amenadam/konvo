@@ -1761,6 +1761,52 @@ bot.hears("❤️ Who Liked Me", async (ctx) => {
     }
   }
 });
+
+bot.hears("🎁 Referral Program", async (ctx) => {
+  const telegramId = ctx.from.id;
+  const user = await usersCollection.findOne({ telegramId });
+
+  if (!user) {
+    await ctx.reply("Please create a profile first.");
+    return ctx.scene.enter("profile-wizard");
+  }
+
+  const referralMessage = `🎁 Referral Program 🎁
+
+Invite friends and earn premium match credits!
+
+Your referral code: ${user.referralCode}
+
+How it works:
+1. Share your referral link below
+2. When someone joins using your link:
+   - You get 1 premium match credit
+   - They get 1 premium match credit
+3. Premium matches are shown first to other premium users
+
+Your credits: ${user.referralCredits || 0}
+People you've referred: ${user.referralCount || 0}`;
+
+  const referralLink = `https://t.me/${
+    (await bot.telegram.getMe()).username
+  }?start=${user.referralCode}`;
+
+  await ctx.reply(
+    referralMessage,
+    Markup.inlineKeyboard([
+      Markup.button.url(
+        "📤 Share Referral Link",
+        `https://t.me/share/url?url=${encodeURIComponent(
+          referralLink
+        )}&text=Join%20me%20on%20this%20dating%20bot!%20Use%20my%20code%20${
+          user.referralCode
+        }%20to%20get%20a%20free%20premium%20match.`
+      ),
+      Markup.button.callback("🔄 Refresh", "show_referral"),
+    ])
+  );
+});
+
 // ===================== FEEDBACK HANDLERS =====================
 // Handle feedback button in main menu
 bot.hears("💬 Give Feedback", async (ctx) => {
