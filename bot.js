@@ -4,14 +4,14 @@ const { MongoClient } = require("mongodb");
 const geodist = require("geodist");
 const { version } = require("./package.json");
 
-
 // Database connection
 const client = new MongoClient(process.env.MONGODB_URI);
 let db,
   usersCollection,
   matchesCollection,
   conversationsCollection,
-  adminCollection;
+  adminCollection,
+  feedbackCollection;
 
 // Initialize bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -255,7 +255,7 @@ const broadcastWizard = new Scenes.WizardScene(
 {userId} - User's Telegram ID
 
 Enter your broadcast message:`;
-    
+
     await ctx.reply(macroHelp);
     return ctx.wizard.next();
   },
@@ -306,6 +306,100 @@ Enter your broadcast message:`;
   }
 );
 
+// ===================== FEEDBACK SCENE =====================
+const feedbackWizard = new Scenes.WizardScene(
+  "feedback-wizard",
+  async (ctx) => {
+    await ctx.reply(
+      "🌟 How would you rate your experience with Konvo?",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("⭐ 1", "rate_1")],
+        [Markup.button.callback("⭐⭐ 2", "rate_2")],
+        [Markup.button.callback("⭐⭐⭐ 3", "rate_3")],
+        [Markup.button.callback("⭐⭐⭐⭐ 4", "rate_4")],
+        [Markup.button.callback("⭐⭐⭐⭐⭐ 5", "rate_5")],
+        [Markup.button.callback("🚫 Cancel", "cancel_feedback")],
+      ])
+    );
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    if (ctx.callbackQuery?.data === "cancel_feedback") {
+      await ctx.answerCbQuery();
+      await ctx.reply("Feedback cancelled.");
+      return ctx.scene.leave();
+    }
+
+    if (ctx.callbackQuery?.data?.startsWith("rate_")) {
+      const rating = parseInt(ctx.callbackQuery.data.split("_")[1]);
+      ctx.wizard.state.rating = rating;
+      await ctx.answerCbQuery(`Rated ${rating} stars`);
+      await ctx.editMessageText(
+        `Thanks for your ${"⭐".repeat(
+          rating
+        )} rating!\n\nWhat would you like to tell us about your experience? (You can share suggestions, issues, or what you love!)`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback("Skip comment", "skip_comment")],
+        ])
+      );
+      return ctx.wizard.next();
+    }
+  },
+  async (ctx) => {
+    if (ctx.callbackQuery?.data === "skip_comment") {
+      await ctx.answerCbQuery();
+      ctx.wizard.state.comment = "No comment provided";
+    } else if (ctx.message?.text) {
+      ctx.wizard.state.comment = ctx.message.text;
+    } else {
+      await ctx.reply("Please share your feedback or click 'Skip comment'");
+      return;
+    }
+
+    // Save feedback to database
+    const feedback = {
+      userId: ctx.from.id,
+      rating: ctx.wizard.state.rating,
+      comment: ctx.wizard.state.comment,
+      username: ctx.from.username,
+      firstName: ctx.from.first_name,
+      createdAt: new Date(),
+      resolved: false,
+    };
+
+    await feedbackCollection.insertOne(feedback);
+
+    // Send thank you message
+    await ctx.reply(
+      `Thank you for your feedback! ${
+        ctx.wizard.state.rating >= 4 ? "❤️" : "🙏"
+      }\n\nWe appreciate you helping us improve Konvo.`,
+      Markup.removeKeyboard()
+    );
+
+    // Notify admins about low ratings (1-3 stars)
+    if (ctx.wizard.state.rating <= 3 && ADMIN_IDS.length > 0) {
+      const adminMessage = `⚠️ Low Rating Received ⚠️
+
+User: ${ctx.from.first_name} (@${ctx.from.username || "no username"})
+Rating: ${"⭐".repeat(ctx.wizard.state.rating)}
+Comment: ${ctx.wizard.state.comment}
+
+User ID: ${ctx.from.id}`;
+
+      for (const adminId of ADMIN_IDS) {
+        try {
+          await bot.telegram.sendMessage(adminId, adminMessage);
+        } catch (error) {
+          console.error("Failed to notify admin:", error);
+        }
+      }
+    }
+
+    return ctx.scene.leave();
+  }
+);
+
 const fix = require("./fix");
 fix(bot, usersCollection, showMainMenu);
 
@@ -314,6 +408,7 @@ const stage = new Scenes.Stage([
   profileWizard,
   editProfileWizard,
   broadcastWizard,
+  feedbackWizard,
 ]);
 bot.use(session());
 bot.use(stage.middleware());
@@ -338,6 +433,7 @@ async function connectDB() {
       matchesCollection = db.collection("matches");
       conversationsCollection = db.collection("conversations");
       adminCollection = db.collection("admin");
+      feedbackCollection = db.collection("feedback");
 
       // Setup event listeners
       client.on("serverClosed", (event) => {
@@ -420,9 +516,7 @@ async function sendLikeNotification(likerId, likedId) {
     if (!liker) return;
 
     const username = liker.username ? `@${liker.username}` : liker.name;
-    const message = `💖 ${
-      liker.first_name || liker.name
-    }  liked your profile!`;
+    const message = `💖 ${liker.first_name || liker.name}  liked your profile!`;
 
     const keyboard = Markup.inlineKeyboard([
       Markup.button.callback("👀 View Profile", `view_profile_${likerId}`),
@@ -981,7 +1075,7 @@ async function showMainMenu(ctx) {
         ["🔍 Find Match", "💌 My Matches"],
         ["👤 My Profile", "✏️ Edit Profile"],
         ["❤️ Who Liked Me", "🎁 Referral Program"],
-        ["🚪 Deactivate Profile"],
+        ["💬 Give Feedback", "🚪 Deactivate Profile"],
       ]).resize()
     );
 
@@ -990,10 +1084,10 @@ async function showMainMenu(ctx) {
         "Admin Menu:",
         Markup.keyboard([
           ["📊 Stats", "📢 Broadcast"],
-          ["🔙 User Menu", "All Users"],
+          ["📊 Feedback", "All Users"],
           ["🔍 Find Match", "💌 My Matches"],
-        ["👤 My Profile", "✏️ Edit Profile"],
-        ["❤️ Who Liked Me", "🎁 Referral Program"],
+          ["👤 My Profile", "✏️ Edit Profile"],
+          ["❤️ Who Liked Me", "🎁 Referral Program"],
         ]).resize()
       );
     }
@@ -1076,8 +1170,8 @@ async function handleMessage(ctx, recipientId, text) {
           `share_username_${senderId}`
         ),
         Markup.button.callback(
-        "🎲 Would You Rather",
-        `fun_question_${senderId}`
+          "🎲 Would You Rather",
+          `fun_question_${senderId}`
         ),
       ])
     );
@@ -1102,16 +1196,16 @@ async function sendBroadcast(ctx, message, keyboard = null) {
       try {
         // Get user data for macro replacement
         const user = await usersCollection.findOne({ telegramId });
-        
+
         // Replace macros with user-specific data
         let personalizedMessage = message
-          .replace(/{name}/g, user?.name || 'there')
-          .replace(/{firstName}/g, user?.firstName || '')
-          .replace(/{username}/g, user?.username ? `@${user.username}` : '')
-          .replace(/{age}/g, user?.age || '')
-          .replace(/{gender}/g, user?.gender || '')
-          .replace(/{credits}/g, user?.referralCredits || '0')
-          .replace(/{userId}/g, user?.telegramId || '');
+          .replace(/{name}/g, user?.name || "there")
+          .replace(/{firstName}/g, user?.firstName || "")
+          .replace(/{username}/g, user?.username ? `@${user.username}` : "")
+          .replace(/{age}/g, user?.age || "")
+          .replace(/{gender}/g, user?.gender || "")
+          .replace(/{credits}/g, user?.referralCredits || "0")
+          .replace(/{userId}/g, user?.telegramId || "");
 
         let sentMessage;
         if (keyboard) {
@@ -1121,7 +1215,10 @@ async function sendBroadcast(ctx, message, keyboard = null) {
             keyboard
           );
         } else {
-          sentMessage = await bot.telegram.sendMessage(telegramId, personalizedMessage);
+          sentMessage = await bot.telegram.sendMessage(
+            telegramId,
+            personalizedMessage
+          );
         }
         successCount++;
 
@@ -1260,6 +1357,176 @@ Female users: ${femaleUsers}
     await ctx.reply("Failed to load statistics. Please try again.");
   }
 }
+
+// ===================== FEEDBACK STATS FUNCTION =====================
+async function showFeedbackStats(ctx) {
+  try {
+    const totalFeedback = await feedbackCollection.countDocuments();
+    const averageRating = await feedbackCollection
+      .aggregate([{ $group: { _id: null, avgRating: { $avg: "$rating" } } }])
+      .toArray();
+
+    const avg = averageRating[0]?.avgRating || 0;
+
+    const ratingCounts = await feedbackCollection.aggregate(
+      [
+        { $group: { _id: "$rating", count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ].toArray()
+    );
+
+    const unresolvedCount = await feedbackCollection.countDocuments({
+      resolved: false,
+    });
+    const recentFeedback = await feedbackCollection
+      .find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .toArray();
+
+    let statsMessage = `📊 Feedback Statistics\n\n`;
+    statsMessage += `⭐ Average Rating: ${avg.toFixed(1)}/5\n`;
+    statsMessage += `📝 Total Feedback: ${totalFeedback}\n`;
+    statsMessage += `⚠️ Unresolved: ${unresolvedCount}\n\n`;
+
+    statsMessage += `Rating Breakdown:\n`;
+    for (let i = 1; i <= 5; i++) {
+      const count = ratingCounts.find((r) => r._id === i)?.count || 0;
+      const percentage =
+        totalFeedback > 0 ? ((count / totalFeedback) * 100).toFixed(1) : 0;
+      statsMessage += `${"⭐".repeat(i)}: ${count} (${percentage}%)\n`;
+    }
+
+    statsMessage += `\nRecent Feedback:\n`;
+    recentFeedback.forEach((fb) => {
+      statsMessage += `\n${"⭐".repeat(fb.rating)} - ${fb.comment.substring(
+        0,
+        50
+      )}${fb.comment.length > 50 ? "..." : ""}`;
+    });
+
+    await ctx.reply(
+      statsMessage,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("📋 View All Feedback", "view_all_feedback")],
+        [Markup.button.callback("🔄 Refresh", "refresh_feedback_stats")],
+      ])
+    );
+  } catch (error) {
+    console.error("Error in showFeedbackStats:", error);
+    await ctx.reply("Failed to load feedback statistics.");
+  }
+}
+
+// ===================== FEEDBACK HANDLERS =====================
+// Handle feedback button in main menu
+bot.hears("💬 Give Feedback", async (ctx) => {
+  await ctx.scene.enter("feedback-wizard");
+});
+
+// Handle view all feedback action
+bot.action("view_all_feedback", async (ctx) => {
+  await ctx.answerCbQuery();
+  const allFeedback = await feedbackCollection
+    .find()
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .toArray();
+
+  if (allFeedback.length === 0) {
+    await ctx.reply("No feedback received yet.");
+    return;
+  }
+
+  for (const fb of allFeedback) {
+    const user = await usersCollection.findOne({ telegramId: fb.userId });
+    const feedbackMessage = `
+${"⭐".repeat(fb.rating)} • ${fb.resolved ? "✅" : "⚠️"}
+From: ${user?.name || fb.firstName} (@${fb.username || "no username"})
+Date: ${fb.createdAt.toLocaleDateString()}
+Comment: ${fb.comment}
+
+${fb.resolved ? "RESOLVED" : "UNRESOLVED"}`;
+
+    await ctx.reply(
+      feedbackMessage,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Mark Resolved", `resolve_fb_${fb._id}`)],
+        [Markup.button.callback("📨 Message User", `msg_fb_user_${fb.userId}`)],
+      ])
+    );
+  }
+});
+
+// Handle resolve feedback action
+bot.action(/resolve_fb_(\w+)/, async (ctx) => {
+  const feedbackId = ctx.match[1];
+  await feedbackCollection.updateOne(
+    { _id: new ObjectId(feedbackId) },
+    { $set: { resolved: true, resolvedAt: new Date() } }
+  );
+  await ctx.answerCbQuery("Feedback marked as resolved");
+  await ctx.editMessageText(ctx.callbackQuery.message.text + "\n\n✅ RESOLVED");
+});
+
+// Handle message user from feedback
+bot.action(/msg_fb_user_(\d+)/, async (ctx) => {
+  const userId = parseInt(ctx.match[1]);
+  ctx.session.adminMessageTarget = userId;
+  await ctx.reply(
+    `Enter message for user ${userId}:`,
+    Markup.keyboard([["Cancel"]]).resize()
+  );
+  ctx.session.adminWaitingForMessage = true;
+});
+
+// Handle refresh feedback stats
+bot.action("refresh_feedback_stats", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.deleteMessage();
+  await showFeedbackStats(ctx);
+});
+
+// ===================== AUTOMATIC FEEDBACK PROMPT =====================
+// Add this function to prompt for feedback after certain interactions
+async function promptForFeedback(ctx) {
+  const user = await usersCollection.findOne({ telegramId: ctx.from.id });
+
+  // Only prompt if user has been active for a while and hasn't given feedback recently
+  const lastFeedback = await feedbackCollection.findOne(
+    { userId: ctx.from.id },
+    { sort: { createdAt: -1 } }
+  );
+
+  const daysSinceLastFeedback = lastFeedback
+    ? (new Date() - lastFeedback.createdAt) / (1000 * 60 * 60 * 24)
+    : Infinity;
+
+  if (daysSinceLastFeedback > 7) {
+    // Prompt every 7 days max
+    await ctx.reply(
+      "We'd love to hear your thoughts! 💬\n\nHow has your experience been with Konvo so far?",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("💬 Give Feedback", "give_feedback_now")],
+        [Markup.button.callback("Maybe later", "feedback_later")],
+      ])
+    );
+  }
+}
+
+// Handle feedback prompt actions
+bot.action("give_feedback_now", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.scene.enter("feedback-wizard");
+});
+
+bot.action("feedback_later", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.deleteMessage();
+  await ctx.reply(
+    "No problem! Feel free to use the '💬 Give Feedback' option anytime."
+  );
+});
 
 // ===================== BOT COMMANDS =====================
 bot.start(async (ctx) => {
@@ -1706,30 +1973,35 @@ bot.on("text", async (ctx) => {
 
 // ===================== FUN QUESTION HANDLER =====================
 
-
 const wyrQuestions = [
   {
-    question: "Would you rather go on a cozy movie night 🍿 or a fancy dinner date 🍷?",
+    question:
+      "Would you rather go on a cozy movie night 🍿 or a fancy dinner date 🍷?",
     options: ["Movie Night", "Fancy Dinner"],
   },
   {
-    question: "Would you rather receive a surprise gift 🎁 or a surprise kiss 💋?",
+    question:
+      "Would you rather receive a surprise gift 🎁 or a surprise kiss 💋?",
     options: ["Gift", "Kiss"],
   },
   {
-    question: "Would you rather travel the world together 🌍 or build a dream home 🏡?",
+    question:
+      "Would you rather travel the world together 🌍 or build a dream home 🏡?",
     options: ["Travel", "Dream Home"],
   },
   {
-    question: "Would you rather cuddle all night 🛌 or go on a late-night adventure 🌙?",
+    question:
+      "Would you rather cuddle all night 🛌 or go on a late-night adventure 🌙?",
     options: ["Cuddle", "Adventure"],
   },
   {
-    question: "Would you rather share your favorite playlist 🎶 or cook your favorite meal 🍲 for each other?",
+    question:
+      "Would you rather share your favorite playlist 🎶 or cook your favorite meal 🍲 for each other?",
     options: ["Playlist", "Meal"],
   },
   {
-    question: "Would you rather spend a rainy day ☔ reading together or dancing in the rain 💃?",
+    question:
+      "Would you rather spend a rainy day ☔ reading together or dancing in the rain 💃?",
     options: ["Reading", "Dancing"],
   },
   {
@@ -1737,31 +2009,38 @@ const wyrQuestions = [
     options: ["Stars", "Rain"],
   },
   {
-    question: "Would you rather plan a surprise date 🎭 or be surprised by your partner 🎉?",
+    question:
+      "Would you rather plan a surprise date 🎭 or be surprised by your partner 🎉?",
     options: ["Plan", "Be Surprised"],
   },
   {
-    question: "Would you rather hold hands while walking 🚶‍♂️ or hug every few minutes 🤗?",
+    question:
+      "Would you rather hold hands while walking 🚶‍♂️ or hug every few minutes 🤗?",
     options: ["Hold Hands", "Hug Often"],
   },
   {
-    question: "Would you rather spend a weekend in the mountains 🏔️ or on the beach 🏖️?",
+    question:
+      "Would you rather spend a weekend in the mountains 🏔️ or on the beach 🏖️?",
     options: ["Mountains", "Beach"],
   },
   {
-    question: "Would you rather dance slowly to a romantic song 🎶 or sing karaoke loudly together 🎤?",
+    question:
+      "Would you rather dance slowly to a romantic song 🎶 or sing karaoke loudly together 🎤?",
     options: ["Slow Dance", "Karaoke"],
   },
   {
-    question: "Would you rather share one dessert 🍰 or order two different ones 🍨?",
+    question:
+      "Would you rather share one dessert 🍰 or order two different ones 🍨?",
     options: ["Share One", "Two Desserts"],
   },
   {
-    question: "Would you rather send long love texts 💌 or have late-night phone calls 📞?",
+    question:
+      "Would you rather send long love texts 💌 or have late-night phone calls 📞?",
     options: ["Love Texts", "Phone Calls"],
   },
   {
-    question: "Would you rather have a matching couple outfit 👕 or matching couple tattoos 💉?",
+    question:
+      "Would you rather have a matching couple outfit 👕 or matching couple tattoos 💉?",
     options: ["Outfit", "Tattoos"],
   },
   {
@@ -1769,7 +2048,8 @@ const wyrQuestions = [
     options: ["First Love", "Last Love"],
   },
   {
-    question: "Would you rather play video games together 🎮 or binge-watch a series 📺?",
+    question:
+      "Would you rather play video games together 🎮 or binge-watch a series 📺?",
     options: ["Video Games", "Series"],
   },
   {
@@ -1777,19 +2057,21 @@ const wyrQuestions = [
     options: ["Morning Kiss", "Night Kiss"],
   },
   {
-    question: "Would you rather laugh until your stomach hurts 😂 or talk until sunrise 🌄?",
+    question:
+      "Would you rather laugh until your stomach hurts 😂 or talk until sunrise 🌄?",
     options: ["Laugh", "Talk"],
   },
   {
-    question: "Would you rather write each other love letters ✍️ or make silly voice notes 🎙️?",
+    question:
+      "Would you rather write each other love letters ✍️ or make silly voice notes 🎙️?",
     options: ["Love Letters", "Voice Notes"],
   },
   {
-    question: "Would you rather cook dinner together 🍝 or order takeout and relax 🍕?",
+    question:
+      "Would you rather cook dinner together 🍝 or order takeout and relax 🍕?",
     options: ["Cook Together", "Order Takeout"],
   },
 ];
-
 
 //compatibility scores
 let compatibilityScores = {}; // cumulative scores per couple
@@ -1881,7 +2163,9 @@ bot.command("compatibility", async (ctx) => {
   );
 
   if (!coupleKey) {
-    return ctx.reply("💔 You don’t have a recorded compatibility score yet. Play more Would You Rather!");
+    return ctx.reply(
+      "💔 You don’t have a recorded compatibility score yet. Play more Would You Rather!"
+    );
   }
 
   const score = compatibilityScores[coupleKey];
@@ -1890,7 +2174,6 @@ bot.command("compatibility", async (ctx) => {
     { parse_mode: "Markdown" }
   );
 });
-
 
 bot.action("wyr_option_a", async (ctx) => {
   await handleWyrAnswer(ctx, "A");
@@ -2022,6 +2305,14 @@ bot.on("text", async (ctx) => {
     delete ctx.session.adminMessageTarget;
   }
 });
+
+bot.hears("📊 Feedback", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) {
+    await ctx.reply("❌ You are not authorized to view feedback.");
+    return;
+  }
+  await showFeedbackStats(ctx);
+});
 // ===================== LIKE/DISLIKE HANDLERS =====================
 bot.action(/like_(\d+)/, async (ctx) => {
   try {
@@ -2148,48 +2439,45 @@ bot.catch((err, ctx) => {
   return ctx.reply("An error occurred. Please try again.");
 });
 
-
 function startBroadcast(bot, usersCollection) {
- 
   const dailyMessages = [
-  "📢 Day 1: Hey Konvo fam 💌! Start your journey with love and positivity today ✨.",
-  "📢 Day 2: Remember, communication is key 🔑. Send a sweet text today ❤️.",
-  "📢 Day 3: Love is an adventure 🌍. Be open to new connections 💕.",
-  "📢 Day 4: A little kindness goes a long way 💌. Surprise someone with it today.",
-  "📢 Day 5: Weekend vibes 🎉! Cozy chats 💬 + flirty moments 😏 = perfect day.",
-  "📢 Day 6: Laughter is love’s best language 😂❤️. Share a joke with someone today.",
-  "📢 Day 7: Sundays are for slowing down 🌸. Appreciate someone who makes you smile.",
-  "📢 Day 8: Confidence is attractive ✨. Be yourself, and love will follow.",
-  "📢 Day 9: Send a compliment today 🌟. You’ll make someone’s whole mood better 💕.",
-  "📢 Day 10: Flirty reminder 😏: A small text can spark a big smile 💌.",
-  "📢 Day 11: Be curious, ask deep questions ☕. That’s how real connections grow ❤️.",
-  "📢 Day 12: Don’t forget to care for yourself too 💫. Self-love attracts real love 💕.",
-  "📢 Day 13: Try sending only emojis in a chat today 😍😂🔥. See how fun it gets!",
-  "📢 Day 14: Mid-month check ✨. Love grows with patience, effort, and laughter ❤️.",
-  "📢 Day 15: Halfway there 🌟! Who’s been your favorite Konvo so far?",
-  "📢 Day 16: Surprise someone today 🎁. Even a sweet ‘hi’ counts 💌.",
-  "📢 Day 17: Honesty is romantic 🔑. Don’t be afraid to share your real thoughts 💕.",
-  "📢 Day 18: Spread love, not silence 💬✨. Reply faster today 😉.",
-  "📢 Day 19: Saturday spark 🔥: Would you rather go on a fun date or a cozy night in?",
-  "📢 Day 20: Weekend magic 🌸. Smile more today — it’s the best flirty signal 😉.",
-  "📢 Day 21: Sundays are perfect for meaningful talks ☕. Who’s your safe person?",
-  "📢 Day 22: Energy check ⚡. Positivity attracts positivity — stay radiant today ✨.",
-  "📢 Day 23: Be the reason someone laughs today 😂❤️.",
-  "📢 Day 24: A quick ‘good morning 🌞’ or ‘good night 🌙’ can warm hearts instantly 💌.",
-  "📢 Day 25: Keep things playful 🎲. Flirting is just fun energy shared ❤️.",
-  "📢 Day 26: Trust + loyalty 🔐 = strongest love. Invest in it 💕.",
-  "📢 Day 27: Compliment someone’s vibe today ✨. It sticks longer than you think 💫.",
-  "📢 Day 28: Be bold today 🌟. Send that message you’ve been holding back 😉.",
-  "📢 Day 29: Almost 30 days 🎉! Keep showing love, keep receiving love ❤️.",
-  "📢 Day 30: You made it 🌟! Keep shining, keep loving, and let Konvo be part of your story 💌."
-];
-
+    "📢 Day 1: Hey Konvo fam 💌! Start your journey with love and positivity today ✨.",
+    "📢 Day 2: Remember, communication is key 🔑. Send a sweet text today ❤️.",
+    "📢 Day 3: Love is an adventure 🌍. Be open to new connections 💕.",
+    "📢 Day 4: A little kindness goes a long way 💌. Surprise someone with it today.",
+    "📢 Day 5: Weekend vibes 🎉! Cozy chats 💬 + flirty moments 😏 = perfect day.",
+    "📢 Day 6: Laughter is love’s best language 😂❤️. Share a joke with someone today.",
+    "📢 Day 7: Sundays are for slowing down 🌸. Appreciate someone who makes you smile.",
+    "📢 Day 8: Confidence is attractive ✨. Be yourself, and love will follow.",
+    "📢 Day 9: Send a compliment today 🌟. You’ll make someone’s whole mood better 💕.",
+    "📢 Day 10: Flirty reminder 😏: A small text can spark a big smile 💌.",
+    "📢 Day 11: Be curious, ask deep questions ☕. That’s how real connections grow ❤️.",
+    "📢 Day 12: Don’t forget to care for yourself too 💫. Self-love attracts real love 💕.",
+    "📢 Day 13: Try sending only emojis in a chat today 😍😂🔥. See how fun it gets!",
+    "📢 Day 14: Mid-month check ✨. Love grows with patience, effort, and laughter ❤️.",
+    "📢 Day 15: Halfway there 🌟! Who’s been your favorite Konvo so far?",
+    "📢 Day 16: Surprise someone today 🎁. Even a sweet ‘hi’ counts 💌.",
+    "📢 Day 17: Honesty is romantic 🔑. Don’t be afraid to share your real thoughts 💕.",
+    "📢 Day 18: Spread love, not silence 💬✨. Reply faster today 😉.",
+    "📢 Day 19: Saturday spark 🔥: Would you rather go on a fun date or a cozy night in?",
+    "📢 Day 20: Weekend magic 🌸. Smile more today — it’s the best flirty signal 😉.",
+    "📢 Day 21: Sundays are perfect for meaningful talks ☕. Who’s your safe person?",
+    "📢 Day 22: Energy check ⚡. Positivity attracts positivity — stay radiant today ✨.",
+    "📢 Day 23: Be the reason someone laughs today 😂❤️.",
+    "📢 Day 24: A quick ‘good morning 🌞’ or ‘good night 🌙’ can warm hearts instantly 💌.",
+    "📢 Day 25: Keep things playful 🎲. Flirting is just fun energy shared ❤️.",
+    "📢 Day 26: Trust + loyalty 🔐 = strongest love. Invest in it 💕.",
+    "📢 Day 27: Compliment someone’s vibe today ✨. It sticks longer than you think 💫.",
+    "📢 Day 28: Be bold today 🌟. Send that message you’ve been holding back 😉.",
+    "📢 Day 29: Almost 30 days 🎉! Keep showing love, keep receiving love ❤️.",
+    "📢 Day 30: You made it 🌟! Keep shining, keep loving, and let Konvo be part of your story 💌.",
+  ];
 
   let currentDay = 0;
 
   async function sendDailyMessage() {
     if (currentDay >= dailyMessages.length) return; // stop after 30 days
- console.log('sending daily message')
+    console.log("sending daily message");
     const message = dailyMessages[currentDay];
     try {
       const users = await usersCollection.find({}).toArray();
@@ -2206,14 +2494,12 @@ function startBroadcast(bot, usersCollection) {
   }
 
   // Send immediately when bot starts
-   console.log('sending...')
+  console.log("sending...");
   sendDailyMessage();
 
   // Schedule every 24 hours (86,400,000 ms)
   setInterval(sendDailyMessage, 24 * 60 * 60 * 1000);
-};
-
-
+}
 
 // ===================== START THE BOT =====================
 async function startBot() {
@@ -2225,7 +2511,7 @@ async function startBot() {
     await bot.launch();
 
     // Use global usersCollection
-   // startBroadcast(bot,usersCollection);
+    // startBroadcast(bot,usersCollection);
 
     console.log("Setting bot commands...");
     await bot.telegram.setMyCommands([
@@ -2276,4 +2562,3 @@ async function startBot() {
 }
 
 startBot();
-
