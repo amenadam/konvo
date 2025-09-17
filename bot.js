@@ -1362,22 +1362,27 @@ Female users: ${femaleUsers}
 async function showFeedbackStats(ctx) {
   try {
     const totalFeedback = await feedbackCollection.countDocuments();
-    const averageRating = await feedbackCollection
+
+    // Fixed aggregation - use toArray() on the cursor
+    const averageRatingResult = await feedbackCollection
       .aggregate([{ $group: { _id: null, avgRating: { $avg: "$rating" } } }])
       .toArray();
 
-    const avg = averageRating[0]?.avgRating || 0;
+    const avg = averageRatingResult[0]?.avgRating || 0;
 
-    const ratingCounts = await feedbackCollection.aggregate(
-      [
+    // Fixed aggregation - use toArray() on the cursor
+    const ratingCounts = await feedbackCollection
+      .aggregate([
         { $group: { _id: "$rating", count: { $sum: 1 } } },
         { $sort: { _id: 1 } },
-      ].toArray()
-    );
+      ])
+      .toArray();
 
     const unresolvedCount = await feedbackCollection.countDocuments({
       resolved: false,
     });
+
+    // Fixed - use toArray() on the cursor
     const recentFeedback = await feedbackCollection
       .find()
       .sort({ createdAt: -1 })
@@ -1397,13 +1402,18 @@ async function showFeedbackStats(ctx) {
       statsMessage += `${"⭐".repeat(i)}: ${count} (${percentage}%)\n`;
     }
 
-    statsMessage += `\nRecent Feedback:\n`;
-    recentFeedback.forEach((fb) => {
-      statsMessage += `\n${"⭐".repeat(fb.rating)} - ${fb.comment.substring(
-        0,
-        50
-      )}${fb.comment.length > 50 ? "..." : ""}`;
-    });
+    if (recentFeedback.length > 0) {
+      statsMessage += `\nRecent Feedback:\n`;
+      recentFeedback.forEach((fb) => {
+        const truncatedComment =
+          fb.comment.length > 50
+            ? fb.comment.substring(0, 50) + "..."
+            : fb.comment;
+        statsMessage += `\n${"⭐".repeat(fb.rating)} - ${truncatedComment}`;
+      });
+    } else {
+      statsMessage += `\nNo feedback received yet.`;
+    }
 
     await ctx.reply(
       statsMessage,
@@ -1414,7 +1424,7 @@ async function showFeedbackStats(ctx) {
     );
   } catch (error) {
     console.error("Error in showFeedbackStats:", error);
-    await ctx.reply("Failed to load feedback statistics.");
+    await ctx.reply("Failed to load feedback statistics. Please try again.");
   }
 }
 
