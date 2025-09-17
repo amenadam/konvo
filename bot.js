@@ -244,7 +244,19 @@ const editProfileWizard = new Scenes.WizardScene(
 const broadcastWizard = new Scenes.WizardScene(
   "broadcast-wizard",
   async (ctx) => {
-    await ctx.reply("Enter the message you want to broadcast to all users:");
+    const macroHelp = `
+📝 Available macros for personalization:
+{name} - User's profile name
+{firstName} - User's first name
+{username} - User's @username
+{age} - User's age
+{gender} - User's gender
+{credits} - User's referral credits
+{userId} - User's Telegram ID
+
+Enter your broadcast message:`;
+    
+    await ctx.reply(macroHelp);
     return ctx.wizard.next();
   },
   async (ctx) => {
@@ -1088,15 +1100,28 @@ async function sendBroadcast(ctx, message, keyboard = null) {
 
     for (const telegramId of telegramIds) {
       try {
+        // Get user data for macro replacement
+        const user = await usersCollection.findOne({ telegramId });
+        
+        // Replace macros with user-specific data
+        let personalizedMessage = message
+          .replace(/{name}/g, user?.name || 'there')
+          .replace(/{firstName}/g, user?.firstName || '')
+          .replace(/{username}/g, user?.username ? `@${user.username}` : '')
+          .replace(/{age}/g, user?.age || '')
+          .replace(/{gender}/g, user?.gender || '')
+          .replace(/{credits}/g, user?.referralCredits || '0')
+          .replace(/{userId}/g, user?.telegramId || '');
+
         let sentMessage;
         if (keyboard) {
           sentMessage = await bot.telegram.sendMessage(
             telegramId,
-            message,
+            personalizedMessage,
             keyboard
           );
         } else {
-          sentMessage = await bot.telegram.sendMessage(telegramId, message);
+          sentMessage = await bot.telegram.sendMessage(telegramId, personalizedMessage);
         }
         successCount++;
 
@@ -2200,7 +2225,7 @@ async function startBot() {
     await bot.launch();
 
     // Use global usersCollection
-    startBroadcast(bot,usersCollection);
+   // startBroadcast(bot,usersCollection);
 
     console.log("Setting bot commands...");
     await bot.telegram.setMyCommands([
