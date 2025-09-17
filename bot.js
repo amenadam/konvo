@@ -1,6 +1,6 @@
 require("dotenv").config();
 const { Telegraf, Markup, Scenes, session } = require("telegraf");
-const { MongoClient } = require("mongodb");
+const { MongoClient, ObjectId } = require("mongodb");
 const geodist = require("geodist");
 const { version } = require("./package.json");
 
@@ -1057,8 +1057,6 @@ async function handleAdminMessageUser(ctx) {
   }
 }
 
-// Add these to your bot action handlers
-
 // ===================== MAIN MENU AND PROFILE FUNCTIONS =====================
 async function showMainMenu(ctx) {
   try {
@@ -1436,58 +1434,153 @@ bot.hears("💬 Give Feedback", async (ctx) => {
 
 // Handle view all feedback action
 bot.action("view_all_feedback", async (ctx) => {
-  await ctx.answerCbQuery();
-  const allFeedback = await feedbackCollection
-    .find()
-    .sort({ createdAt: -1 })
-    .limit(20)
-    .toArray();
+  try {
+    await ctx.answerCbQuery();
+    const allFeedback = await feedbackCollection
+      .find()
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .toArray();
 
-  if (allFeedback.length === 0) {
-    await ctx.reply("No feedback received yet.");
-    return;
-  }
+    if (allFeedback.length === 0) {
+      await ctx.reply("No feedback received yet.");
+      return;
+    }
 
-  for (const fb of allFeedback) {
-    const user = await usersCollection.findOne({ telegramId: fb.userId });
-    const feedbackMessage = `
-${"⭐".repeat(fb.rating)} • ${fb.resolved ? "✅" : "⚠️"}
-From: ${user?.name || fb.firstName} (@${fb.username || "no username"})
+    for (const fb of allFeedback) {
+      // Get user info from users collection
+      const user = await usersCollection.findOne({ telegramId: fb.userId });
+      const userName = user?.name || fb.firstName || "Unknown User";
+      const username = user?.username
+        ? `@${user.username}`
+        : fb.username
+        ? `@${fb.username}`
+        : "No username";
+
+      const feedbackMessage = `
+${"⭐".repeat(fb.rating)} • ${fb.resolved ? "✅ Resolved" : "⚠️ Unresolved"}
+From: ${userName} (${username})
 Date: ${fb.createdAt.toLocaleDateString()}
-Comment: ${fb.comment}
+Comment: ${fb.comment}`;
 
-${fb.resolved ? "RESOLVED" : "UNRESOLVED"}`;
-
-    await ctx.reply(
-      feedbackMessage,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("✅ Mark Resolved", `resolve_fb_${fb._id}`)],
-        [Markup.button.callback("📨 Message User", `msg_fb_user_${fb.userId}`)],
-      ])
-    );
+      await ctx.reply(
+        feedbackMessage,
+        Markup.inlineKeyboard([
+          [Markup.button.callback("✅ Mark Resolved", `resolve_fb_${fb._id}`)],
+          [
+            Markup.button.callback(
+              "📨 Message User",
+              `msg_fb_user_${fb.userId}`
+            ),
+          ],
+        ])
+      );
+    }
+  } catch (error) {
+    console.error("Error in view_all_feedback:", error);
+    await ctx.answerCbQuery("Error loading feedback");
   }
 });
 
 // Handle resolve feedback action
 bot.action(/resolve_fb_(\w+)/, async (ctx) => {
-  const feedbackId = ctx.match[1];
-  await feedbackCollection.updateOne(
-    { _id: new ObjectId(feedbackId) },
-    { $set: { resolved: true, resolvedAt: new Date() } }
-  );
-  await ctx.answerCbQuery("Feedback marked as resolved");
-  await ctx.editMessageText(ctx.callbackQuery.message.text + "\n\n✅ RESOLVED");
+  try {
+    const feedbackId = ctx.match[1];
+    await feedbackCollection.updateOne(
+      { _id: new ObjectId(feedbackId) }, // Now ObjectId is defined
+      { $set: { resolved: true, resolvedAt: new Date() } }
+    );
+    await ctx.answerCbQuery("Feedback marked as resolved");
+
+    // Update the message to show it's resolved
+    const originalText = ctx.callbackQuery.message.text;
+    await ctx.editMessageText(originalText + "\n\n✅ RESOLVED", {
+      reply_markup: { inline_keyboard: [] }, // Remove buttons after resolving
+    });
+  } catch (error) {
+    console.error("Error resolving feedback:", error);
+    await ctx.answerCbQuery("Error marking as resolved");
+  }
 });
 
 // Handle message user from feedback
 bot.action(/msg_fb_user_(\d+)/, async (ctx) => {
-  const userId = parseInt(ctx.match[1]);
-  ctx.session.adminMessageTarget = userId;
-  await ctx.reply(
-    `Enter message for user ${userId}:`,
-    Markup.keyboard([["Cancel"]]).resize()
-  );
-  ctx.session.adminWaitingForMessage = true;
+  try {
+    await ctx.answerCbQuery();
+    const userId = parseInt(ctx.match[1]);
+
+    // Initialize session if it doesn't exist
+    if (!ctx.session) {
+      ctx.session = {};
+    }
+    if (!ctx.session.admin) {
+      ctx.session.admin = {};
+    }
+
+    ctx.session.admin.messageTarget = userId;
+    ctx.session.admin.waitingForMessage = true;
+
+    await ctx.reply(
+      `💌 Enter message for user ${userId}:`,
+      Markup.keyboard([["❌ Cancel"]])
+        .oneTime()
+        .resize()
+    );
+  } catch (error) {
+    console.error("Error in msg_fb_user handler:", error);
+    await ctx.answerCbQuery("Error preparing message");
+  }
+});
+
+// Update the text handler to check for admin message context
+bot.on("text", async (ctx) => {
+  try {
+    // Check if admin is waiting to send a message
+    if (ctx.session?.admin?.waitingForMessage) {
+      if (
+        ctx.message.text.toLowerCase() === "cancel" ||
+        ctx.message.text === "❌ Cancel"
+      ) {
+        delete ctx.session.admin.waitingForMessage;
+        delete ctx.session.admin.messageTarget;
+        await ctx.reply("Message cancelled.", Markup.removeKeyboard());
+        return;
+      }
+
+      const targetUserId = ctx.session.admin.messageTarget;
+
+      try {
+        await ctx.telegram.sendMessage(
+          targetUserId,
+          `📨 Message from admin:\n\n${ctx.message.text}`
+        );
+        await ctx.reply(
+          "✅ Message sent successfully!",
+          Markup.removeKeyboard()
+        );
+      } catch (error) {
+        await ctx.reply(`❌ Failed to send message: ${error.message}`);
+      }
+
+      // Clear the session state
+      delete ctx.session.admin.waitingForMessage;
+      delete ctx.session.admin.messageTarget;
+      return;
+    }
+
+    // Existing conversation handling
+    if (ctx.session.conversationPartner) {
+      await handleMessage(
+        ctx,
+        ctx.session.conversationPartner,
+        ctx.message.text
+      );
+      ctx.session.conversationPartner = null;
+    }
+  } catch (error) {
+    console.error("Error in text handler:", error);
+    await ctx.reply("An error occurred. Please try again.");
+  }
 });
 
 // Handle refresh feedback stats
@@ -1536,6 +1629,11 @@ bot.action("feedback_later", async (ctx) => {
   await ctx.reply(
     "No problem! Feel free to use the '💬 Give Feedback' option anytime."
   );
+});
+
+bot.action("edit_profile_photo", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.scene.enter("edit-profile-wizard");
 });
 
 // ===================== BOT COMMANDS =====================
