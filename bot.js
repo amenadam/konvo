@@ -4,6 +4,7 @@ const { MongoClient, ObjectId } = require("mongodb");
 const geodist = require("geodist");
 const { version } = require("./package.json");
 
+let RATING;
 // Database connection
 const client = new MongoClient(process.env.MONGODB_URI);
 let db,
@@ -1462,7 +1463,7 @@ async function showFeedbackStats(ctx) {
     statsMessage += `⭐ Average Rating: ${avg.toFixed(1)}/5\n`;
     statsMessage += `📝 Total Feedback: ${totalFeedback}\n`;
     statsMessage += `⚠️ Unresolved: ${unresolvedCount}\n\n`;
-
+    RATING = `${avg.toFixed(1)}/5`;
     statsMessage += `Rating Breakdown:\n`;
     for (let i = 1; i <= 5; i++) {
       const count = ratingCounts.find((r) => r._id === i)?.count || 0;
@@ -1602,6 +1603,11 @@ bot.start(async (ctx) => {
 bot.command("version", (ctx) => {
   ctx.reply(`🤖 Bot version: v${version}`);
 });
+
+bot.command("version", (ctx) => {
+  ctx.reply(`⭐️Rating: ${RATING}`);
+});
+
 bot.command("remind", async (ctx) => {
   if (!ADMIN_IDS.includes(ctx.from.id)) {
     await ctx.reply("You are not authorized to send remind broadcasts.");
@@ -2767,6 +2773,7 @@ async function startBot() {
       { command: "start", description: "Start the bot" },
       { command: "help", description: "Show help" },
       { command: "version", description: "Show bot version" },
+      { command: "rating", description: "Show bot rating" },
     ]);
 
     // Ping the bot to verify it's running
