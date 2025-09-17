@@ -2154,13 +2154,6 @@ bot.action(/message_(\d+)/, async (ctx) => {
   await ctx.reply(`Type your message to send:`);
 });
 
-bot.on("text", async (ctx) => {
-  if (ctx.session.conversationPartner) {
-    await handleMessage(ctx, ctx.session.conversationPartner, ctx.message.text);
-    ctx.session.conversationPartner = null;
-  }
-});
-
 // ===================== FUN QUESTION HANDLER =====================
 
 const wyrQuestions = [
@@ -2473,26 +2466,54 @@ bot.action(/admin_refresh_(\d+)/, async (ctx) => {
 
 // Handle the actual message sending
 bot.on("text", async (ctx) => {
-  if (ctx.session.adminWaitingForMessage) {
-    if (ctx.message.text.toLowerCase() === "cancel") {
-      delete ctx.session.adminWaitingForMessage;
-      delete ctx.session.adminMessageTarget;
-      await ctx.reply("Message cancelled", Markup.removeKeyboard());
+  try {
+    // ✅ Admin message handling
+    if (ctx.session?.admin?.waitingForMessage) {
+      if (
+        ctx.message.text.toLowerCase() === "cancel" ||
+        ctx.message.text === "❌ Cancel"
+      ) {
+        delete ctx.session.admin.waitingForMessage;
+        delete ctx.session.admin.messageTarget;
+        await ctx.reply("Message cancelled.", Markup.removeKeyboard());
+        return;
+      }
+
+      const targetUserId = ctx.session.admin.messageTarget;
+      try {
+        await ctx.telegram.sendMessage(
+          targetUserId,
+          `📨 Message from admin:\n\n${ctx.message.text}`
+        );
+        await ctx.reply(
+          "✅ Message sent successfully!",
+          Markup.removeKeyboard()
+        );
+      } catch (error) {
+        await ctx.reply(`❌ Failed to send message: ${error.message}`);
+      }
+
+      delete ctx.session.admin.waitingForMessage;
+      delete ctx.session.admin.messageTarget;
       return;
     }
 
-    try {
-      await ctx.telegram.sendMessage(
-        ctx.session.adminMessageTarget,
-        `📨 Message from admin:\n\n${ctx.message.text}`
+    // ✅ User-to-user chat
+    if (ctx.session?.conversationPartner) {
+      await handleMessage(
+        ctx,
+        ctx.session.conversationPartner,
+        ctx.message.text
       );
-      await ctx.reply("Message sent successfully!", Markup.removeKeyboard());
-    } catch (error) {
-      await ctx.reply(`Failed to send message: ${error.message}`);
+      ctx.session.conversationPartner = null;
+      return;
     }
 
-    delete ctx.session.adminWaitingForMessage;
-    delete ctx.session.adminMessageTarget;
+    // ✅ Catch-all fallback (helps debug unhandled inputs)
+    console.log("Unhandled text:", ctx.message.text);
+  } catch (error) {
+    console.error("Error in text handler:", error);
+    await ctx.reply("An error occurred. Please try again.");
   }
 });
 
