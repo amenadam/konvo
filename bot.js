@@ -254,14 +254,27 @@ const broadcastWizard = new Scenes.WizardScene(
 {credits} - User's referral credits
 {userId} - User's Telegram ID
 
-Enter your broadcast message:`;
+You can now send a broadcast message or upload an image with caption.`;
 
     await ctx.reply(macroHelp);
     return ctx.wizard.next();
   },
   async (ctx) => {
+    if (ctx.message.photo) {
+      // Admin sent an image
+      const photo = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+      ctx.wizard.state.photo = photo;
+      ctx.wizard.state.caption = ctx.message.caption || "";
+
+      await ctx.reply(
+        "Would you like to include a button?",
+        Markup.keyboard([["Yes", "No"], ["Cancel"]]).oneTime()
+      );
+      return ctx.wizard.selectStep(2);
+    }
+
     if (!ctx.message.text) {
-      await ctx.reply("Please enter a valid message");
+      await ctx.reply("Please enter a valid message or send an image.");
       return;
     }
 
@@ -284,7 +297,22 @@ Enter your broadcast message:`;
     }
 
     // No button, send broadcast
-    await sendBroadcast(ctx, ctx.wizard.state.message);
+    await sendBroadcast(
+      ctx,
+      ctx.wizard.state.message,
+      null,
+      ctx.wizard.state.photo,
+      ctx.wizard.state.caption
+    );
+
+    // After broadcast → prompt feedback wizard
+    await ctx.reply(
+      "✅ Broadcast sent. Would you like to gather feedback from users?",
+      Markup.inlineKeyboard([
+        Markup.button.callback("Get Feedback", "start-feedback"),
+      ])
+    );
+
     return ctx.scene.leave();
   },
   async (ctx) => {
@@ -295,12 +323,28 @@ Enter your broadcast message:`;
       await sendBroadcast(
         ctx,
         ctx.wizard.state.message,
-        Markup.inlineKeyboard([button])
+        Markup.inlineKeyboard([button]),
+        ctx.wizard.state.photo,
+        ctx.wizard.state.caption
       );
     } else {
       await ctx.reply("Invalid format. Broadcast sent without button.");
-      await sendBroadcast(ctx, ctx.wizard.state.message);
+      await sendBroadcast(
+        ctx,
+        ctx.wizard.state.message,
+        null,
+        ctx.wizard.state.photo,
+        ctx.wizard.state.caption
+      );
     }
+
+    // After broadcast → prompt feedback wizard
+    await ctx.reply(
+      "✅ Broadcast sent. Would you like to gather feedback from users?",
+      Markup.inlineKeyboard([
+        Markup.button.callback("Get Feedback", "start-feedback"),
+      ])
+    );
 
     return ctx.scene.leave();
   }
@@ -1182,7 +1226,13 @@ async function handleMessage(ctx, recipientId, text) {
 }
 
 // ===================== BROADCAST FUNCTIONS =====================
-async function sendBroadcast(ctx, message, keyboard = null) {
+async function sendBroadcast(
+  ctx,
+  message,
+  keyboard = null,
+  photo = null,
+  caption = null
+) {
   try {
     const telegramIds = await usersCollection.distinct("telegramId");
     let successCount = 0;
@@ -1197,36 +1247,57 @@ async function sendBroadcast(ctx, message, keyboard = null) {
 
         // Replace macros with user-specific data
         let personalizedMessage = message
-          .replace(/{name}/g, user?.name || "there")
-          .replace(/{firstName}/g, user?.firstName || "")
-          .replace(/{username}/g, user?.username ? `@${user.username}` : "")
-          .replace(/{age}/g, user?.age || "")
-          .replace(/{gender}/g, user?.gender || "")
-          .replace(/{credits}/g, user?.referralCredits || "0")
-          .replace(/{userId}/g, user?.telegramId || "");
+          ? message
+              .replace(/{name}/g, user?.name || "there")
+              .replace(/{firstName}/g, user?.firstName || "")
+              .replace(/{username}/g, user?.username ? `@${user.username}` : "")
+              .replace(/{age}/g, user?.age || "")
+              .replace(/{gender}/g, user?.gender || "")
+              .replace(/{credits}/g, user?.referralCredits || "0")
+              .replace(/{userId}/g, user?.telegramId || "")
+          : "";
+
+        let personalizedCaption = caption
+          ? caption
+              .replace(/{name}/g, user?.name || "there")
+              .replace(/{firstName}/g, user?.firstName || "")
+              .replace(/{username}/g, user?.username ? `@${user.username}` : "")
+              .replace(/{age}/g, user?.age || "")
+              .replace(/{gender}/g, user?.gender || "")
+              .replace(/{credits}/g, user?.referralCredits || "0")
+              .replace(/{userId}/g, user?.telegramId || "")
+          : "";
 
         let sentMessage;
-        if (keyboard) {
-          sentMessage = await bot.telegram.sendMessage(
-            telegramId,
-            personalizedMessage,
-            keyboard
-          );
+        if (photo) {
+          // Send photo broadcast
+          sentMessage = await bot.telegram.sendPhoto(telegramId, photo, {
+            caption: personalizedCaption || personalizedMessage,
+            ...keyboard,
+          });
         } else {
-          sentMessage = await bot.telegram.sendMessage(
-            telegramId,
-            personalizedMessage
-          );
+          // Send text broadcast
+          if (keyboard) {
+            sentMessage = await bot.telegram.sendMessage(
+              telegramId,
+              personalizedMessage,
+              keyboard
+            );
+          } else {
+            sentMessage = await bot.telegram.sendMessage(
+              telegramId,
+              personalizedMessage
+            );
+          }
         }
+
         successCount++;
 
         try {
           await bot.telegram.pinChatMessage(
             telegramId,
             sentMessage.message_id,
-            {
-              disable_notification: true,
-            }
+            { disable_notification: true }
           );
         } catch (pinError) {
           console.error(`Couldn't pin for ${telegramId}:`, pinError.message);
@@ -1872,6 +1943,11 @@ bot.hears("❤️ Who Liked Me", async (ctx) => {
       );
     }
   }
+});
+
+bot.action("start-feedback", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.scene.enter("feedback-wizard");
 });
 
 bot.action(/view_profile_(\d+)/, async (ctx) => {
