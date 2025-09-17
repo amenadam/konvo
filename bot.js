@@ -1688,25 +1688,6 @@ async function promptForFeedback(ctx) {
   }
 }
 
-// Handle feedback prompt actions
-bot.action("give_feedback_now", async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.scene.enter("feedback-wizard");
-});
-
-bot.action("feedback_later", async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.deleteMessage();
-  await ctx.reply(
-    "No problem! Feel free to use the '💬 Give Feedback' option anytime."
-  );
-});
-
-bot.action("edit_profile_photo", async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.scene.enter("edit-profile-wizard");
-});
-
 // ===================== BOT COMMANDS =====================
 bot.start(async (ctx) => {
   try {
@@ -1948,6 +1929,25 @@ bot.hears("❤️ Who Liked Me", async (ctx) => {
 bot.action("start-feedback", async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.scene.enter("feedback-wizard");
+});
+
+// Handle feedback prompt actions
+bot.action("give_feedback_now", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.scene.enter("feedback-wizard");
+});
+
+bot.action("feedback_later", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.deleteMessage();
+  await ctx.reply(
+    "No problem! Feel free to use the '💬 Give Feedback' option anytime."
+  );
+});
+
+bot.action("edit_profile_photo", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.scene.enter("edit-profile-wizard");
 });
 
 bot.action(/view_profile_(\d+)/, async (ctx) => {
