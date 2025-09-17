@@ -1604,7 +1604,7 @@ bot.command("version", (ctx) => {
   ctx.reply(`🤖 Bot version: v${version}`);
 });
 
-bot.command("version", (ctx) => {
+bot.command("rating", (ctx) => {
   ctx.reply(`⭐️Rating: ${RATING}`);
 });
 
