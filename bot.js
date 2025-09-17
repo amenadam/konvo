@@ -1256,6 +1256,10 @@ async function sendBroadcast(
               .replace(/{gender}/g, user?.gender || "")
               .replace(/{credits}/g, user?.referralCredits || "0")
               .replace(/{userId}/g, user?.telegramId || "")
+              .replace(
+                /{interested}/g,
+                `${user.gender === "Male" ? "girls" : "boys"}`
+              )
           : "";
 
         let personalizedCaption = caption
