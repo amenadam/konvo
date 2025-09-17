@@ -1629,7 +1629,13 @@ bot.hears("👤 My Profile", async (ctx) => {
 bot.hears("✏️ Edit Profile", async (ctx) => {
   await ctx.scene.enter("edit-profile-wizard");
 });
-
+bot.hears("📊 Feedback", async (ctx) => {
+  if (!ADMIN_IDS.includes(ctx.from.id)) {
+    await ctx.reply("❌ You are not authorized to view feedback.");
+    return;
+  }
+  await showFeedbackStats(ctx);
+});
 bot.hears("🚪 Deactivate Profile", async (ctx) => {
   const telegramId = ctx.from.id;
   await usersCollection.updateOne({ telegramId }, { $set: { active: false } });
@@ -2306,13 +2312,6 @@ bot.on("text", async (ctx) => {
   }
 });
 
-bot.hears("📊 Feedback", async (ctx) => {
-  if (!ADMIN_IDS.includes(ctx.from.id)) {
-    await ctx.reply("❌ You are not authorized to view feedback.");
-    return;
-  }
-  await showFeedbackStats(ctx);
-});
 // ===================== LIKE/DISLIKE HANDLERS =====================
 bot.action(/like_(\d+)/, async (ctx) => {
   try {
